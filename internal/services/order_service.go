@@ -322,3 +322,86 @@ func (s *OrderService) UpdateStatus(ctx context.Context, id uuid.UUID, status mo
 
 	return s.FindByID(ctx, updatedOrder.ID)
 }
+
+func (s *OrderService) Pay(ctx context.Context, id uuid.UUID) (dto.OrderResponse, error) {
+
+	order, err := s.orderRepo.FindByID(ctx, id)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+
+	switch order.Status {
+	case model.OrderStatusPaid:
+		return dto.OrderResponse{},
+			custom_errors.ErrOrderAlreadyPaid
+	case model.OrderStatusCanceled:
+		return dto.OrderResponse{},
+			custom_errors.ErrOrderCannotChangeStatus
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+
+	defer tx.Rollback(ctx)
+
+	order, err = s.orderRepo.UpdateStatus(ctx, tx, id, model.OrderStatusPaid)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return dto.OrderResponse{}, err
+	}
+
+	return s.FindByID(ctx, order.ID)
+}
+
+func (s *OrderService) Cancel(ctx context.Context, id uuid.UUID) (dto.OrderResponse, error) {
+
+	order, err := s.orderRepo.FindByID(ctx, id)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+
+	switch order.Status {
+	case model.OrderStatusCanceled:
+		return dto.OrderResponse{},
+			custom_errors.ErrOrderAlreadyCanceled
+	case model.OrderStatusPaid:
+		return dto.OrderResponse{},
+			custom_errors.ErrOrderCannotChangeStatus
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	items, err := s.itemRepo.FindByOrderID(ctx, order.ID)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+
+	for _, item := range items {
+		product, err := s.productRepo.FindByID(ctx, item.ProductID)
+		if err != nil {
+			return dto.OrderResponse{}, err
+		}
+		newStock := product.Stock + item.Quantity
+		err = s.productRepo.UpdateStock(ctx, tx, product.ID, newStock)
+		if err != nil {
+			return dto.OrderResponse{}, err
+		}
+	}
+
+	order, err = s.orderRepo.UpdateStatus(ctx, tx, id, model.OrderStatusCanceled)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return dto.OrderResponse{}, err
+	}
+	return s.FindByID(ctx, order.ID)
+}

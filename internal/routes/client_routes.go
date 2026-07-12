@@ -6,7 +6,7 @@ import (
 )
 
 func ClientRoutes(r chi.Router, controller *controllers.ClientController) {
-	r.Post("/clients", controller.CreateClient)
-	r.Get("/clients", controller.FindAllClients)
-	r.Get("/clients/{id}", controller.FindClientByID)
+	r.Post("/clientes", controller.CreateClient)
+	r.Get("/clientes", controller.FindAllClients)
+	r.Get("/clientes/{id}", controller.FindClientByID)
 }

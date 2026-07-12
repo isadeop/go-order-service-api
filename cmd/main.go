@@ -100,20 +100,22 @@ func main() {
 		cfg.Port,
 	)
 
-	log.Println("POST   /client       ->  create client | criar cliente")
-	log.Println("GET    /client       -> list clients | listar clientes")
-	log.Println("GET    /cliente/{id}  -> search by id | buscar por id")
+	log.Println("POST   /clientes       ->  create client | criar cliente")
+	log.Println("GET    /clientes       -> list clients | listar clientes")
+	log.Println("GET    /clientes/{id}  -> search by id | buscar por id")
 
-	log.Println("POST   /products       ->  create product | criar produto")
-	log.Println("GET    /products       -> list products | listar produtos")
-	log.Println("GET    /products/{id}  -> search product by id | buscar produto por id")
-	log.Println("PUT    /products/{id}  -> update product by id | atualizar produto por id")
-	log.Println("DELETE    /products/{id}  -> delete product by id | deletar produto por id")
+	log.Println("POST   /produtos       ->  create product | criar produto")
+	log.Println("GET    /produtos       -> list products | listar produtos")
+	log.Println("GET    /produtos/{id}  -> search product by id | buscar produto por id")
+	log.Println("PUT    /produtos/{id}  -> update product by id | atualizar produto por id")
+	log.Println("DELETE    /produtos/{id}  -> delete product by id | deletar produto por id")
 
-	log.Println("POST   /orders       ->  create order | criar pedido")
-	log.Println("GET    /orders       -> list order | listar pedidos")
-	log.Println("GET    /orders/{id}  -> search order by id | buscar pedido por id")
-	log.Println("PATCH    /orders/{id}/status  -> update order status by id | atualizar status do pedido por id")
+	log.Println("POST   /pedidos       ->  create order | criar pedido")
+	log.Println("GET    /pedidos?limit=10&offset=0       -> list order | listar pedidos")
+	log.Println("GET    /pedidos/{id}  -> search order by id | buscar pedido por id")
+	log.Println("PATCH   /pedidos/{id}/status  -> update order status by id | atualizar status do pedido por id")
+	log.Println("POST   /pedidos/{id}/pagar       ->  update order status to paid | atualizar status do pedido para paid (pago)")
+	log.Println("POST   /pedidos/{id}/cancelar       ->  update order status to canceled | atualizar status do pedido para canceled (cancelado)")
 
 	if err := http.ListenAndServe(
 		":"+cfg.Port,

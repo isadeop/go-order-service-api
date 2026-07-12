@@ -6,9 +6,9 @@ import (
 )
 
 func ProductRoutes(r chi.Router, controller *controllers.ProductController) {
-	r.Post("/products", controller.CreateProduct)
-	r.Get("/products", controller.FindAllProducts)
-	r.Get("/products/{id}", controller.FindProductByID)
-	r.Put("/products/{id}", controller.UpdateProduct)
-	r.Delete("/products/{id}", controller.DeleteProduct)
+	r.Post("/produtos", controller.CreateProduct)
+	r.Get("/produtos", controller.FindAllProducts)
+	r.Get("/produtos/{id}", controller.FindProductByID)
+	r.Put("/produtos/{id}", controller.UpdateProduct)
+	r.Delete("/produtos/{id}", controller.DeleteProduct)
 }

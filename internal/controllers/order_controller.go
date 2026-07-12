@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -20,6 +21,8 @@ type OrderService interface {
 	FindByID(ctx context.Context, id uuid.UUID) (dto.OrderResponse, error)
 	FindAll(ctx context.Context, limit int, offset int) ([]dto.OrderResponse, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status model.OrderStatus) (dto.OrderResponse, error)
+	Pay(ctx context.Context, id uuid.UUID) (dto.OrderResponse, error)
+	Cancel(ctx context.Context, id uuid.UUID) (dto.OrderResponse, error)
 }
 
 type OrderController struct {
@@ -109,8 +112,15 @@ func (c *OrderController) FindOrderByID(w http.ResponseWriter, r *http.Request) 
 
 func (c *OrderController) FindOrders(w http.ResponseWriter, r *http.Request) {
 
-	limit := 20
+	limit := 10
 	offset := 0
+
+	if value := r.URL.Query().Get("limit"); value != "" {
+		fmt.Sscanf(value, "%d", &limit)
+	}
+	if value := r.URL.Query().Get("offset"); value != "" {
+		fmt.Sscanf(value, "%d", &offset)
+	}
 
 	response, err := c.service.FindAll(r.Context(), limit, offset)
 	if err != nil {
@@ -141,6 +151,42 @@ func (c *OrderController) UpdateOrderStatus(w http.ResponseWriter, r *http.Reque
 	}
 
 	response, err := c.service.UpdateStatus(r.Context(), id, request.Status)
+	if err != nil {
+		writeOrderError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (c *OrderController) Pay(w http.ResponseWriter, r *http.Request) {
+
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeOrderError(w, custom_errors.ErrInvalidOrderID)
+		return
+	}
+
+	response, err := c.service.Pay(r.Context(), id)
+	if err != nil {
+		writeOrderError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (c *OrderController) Cancel(w http.ResponseWriter, r *http.Request) {
+
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeOrderError(w, custom_errors.ErrInvalidOrderID)
+		return
+	}
+
+	response, err := c.service.Cancel(r.Context(), id)
 	if err != nil {
 		writeOrderError(w, err)
 		return

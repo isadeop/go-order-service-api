@@ -54,6 +54,27 @@ func main() {
 	productController :=
 		controllers.NewProductController(productService)
 
+	orderRepository :=
+		repository.NewOrderRepository(pool)
+
+	orderItemRepository :=
+		repository.NewOrderItemRepository(pool)
+
+	productStockRepository :=
+		repository.NewProductRepository(pool)
+
+	orderService :=
+		services.NewOrderService(
+			pool,
+			orderRepository,
+			orderItemRepository,
+			productStockRepository,
+			clientRepository,
+		)
+
+	orderController :=
+		controllers.NewOrderController(orderService)
+
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -69,6 +90,11 @@ func main() {
 		productController,
 	)
 
+	routes.OrderRoutes(
+		r,
+		orderController,
+	)
+
 	log.Printf(
 		"API rodando em http://localhost:%s",
 		cfg.Port,
@@ -80,9 +106,14 @@ func main() {
 
 	log.Println("POST   /products       ->  create product | criar produto")
 	log.Println("GET    /products       -> list products | listar produtos")
-	log.Println("GET    /products/{id}  -> search by id | buscar por id")
+	log.Println("GET    /products/{id}  -> search product by id | buscar produto por id")
 	log.Println("PUT    /products/{id}  -> update product by id | atualizar produto por id")
 	log.Println("DELETE    /products/{id}  -> delete product by id | deletar produto por id")
+
+	log.Println("POST   /orders       ->  create order | criar pedido")
+	log.Println("GET    /orders       -> list order | listar pedidos")
+	log.Println("GET    /orders/{id}  -> search order by id | buscar pedido por id")
+	log.Println("PATCH    /orders/{id}/status  -> update order status by id | atualizar status do pedido por id")
 
 	if err := http.ListenAndServe(
 		":"+cfg.Port,

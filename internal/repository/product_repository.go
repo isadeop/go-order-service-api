@@ -50,7 +50,13 @@ const (
 		WHERE id = $1
 		RETURNING id, name, price, stock
 	`
-
+	updateProductStockQuery = `
+	UPDATE products
+	SET
+		stock = $2,
+		updated_at = now()
+	WHERE id = $1
+	`
 	deleteProductQuery = `
 		DELETE FROM products
 		WHERE id = $1
@@ -191,6 +197,31 @@ func (repo *ProductRepository) Update(ctx context.Context, id uuid.UUID, product
 	}
 
 	return product, nil
+}
+
+func (repo *ProductRepository) UpdateStock(
+	ctx context.Context,
+	tx pgx.Tx,
+	productID uuid.UUID,
+	stock int,
+) error {
+
+	commandTag, err := tx.Exec(
+		ctx,
+		updateProductStockQuery,
+		productID,
+		stock,
+	)
+
+	if err != nil {
+		return fmt.Errorf("update product stock: %w", err)
+	}
+
+	if commandTag.RowsAffected() == 0 {
+		return custom_errors.ErrProductNotFound
+	}
+
+	return nil
 }
 
 func (repo *ProductRepository) Delete(ctx context.Context, id uuid.UUID) error {

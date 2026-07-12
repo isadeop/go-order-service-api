@@ -45,6 +45,15 @@ func main() {
 	clientController :=
 		controllers.NewClientController(clientService)
 
+	productRepository :=
+		repository.NewProductRepository(pool)
+
+	productService :=
+		services.NewProductService(productRepository)
+
+	productController :=
+		controllers.NewProductController(productService)
+
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -55,6 +64,11 @@ func main() {
 		clientController,
 	)
 
+	routes.ProductRoutes(
+		r,
+		productController,
+	)
+
 	log.Printf(
 		"API rodando em http://localhost:%s",
 		cfg.Port,
@@ -63,6 +77,12 @@ func main() {
 	log.Println("POST   /client       ->  create client | criar cliente")
 	log.Println("GET    /client       -> list clients | listar clientes")
 	log.Println("GET    /cliente/{id}  -> search by id | buscar por id")
+
+	log.Println("POST   /products       ->  create product | criar produto")
+	log.Println("GET    /products       -> list products | listar produtos")
+	log.Println("GET    /products/{id}  -> search by id | buscar por id")
+	log.Println("PUT    /products/{id}  -> update product by id | atualizar produto por id")
+	log.Println("DELETE    /products/{id}  -> delete product by id | deletar produto por id")
 
 	if err := http.ListenAndServe(
 		":"+cfg.Port,

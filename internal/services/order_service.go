@@ -59,7 +59,7 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 		return dto.OrderResponse{}, custom_errors.ErrOrderItemsRequired
 	}
 
-	_, err := s.clientRepo.FindByID(ctx, request.ClientID)
+	client, err := s.clientRepo.FindByID(ctx, request.ClientID)
 
 	if errors.Is(err, custom_errors.ErrClientNotFound) {
 		return dto.OrderResponse{}, custom_errors.ErrOrderClientNotFound
@@ -147,7 +147,7 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 		}
 
 		total += itemTotal
-		itemsResponse = append(itemsResponse, dto.NewOrderItemResponse(item))
+		itemsResponse = append(itemsResponse, dto.NewOrderItemResponse(item, product.Name))
 	}
 
 	err = s.orderRepo.UpdateTotal(ctx, tx, order.ID, total)
@@ -163,7 +163,7 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 			fmt.Errorf("commit order: %w", err)
 	}
 
-	response := dto.NewOrderResponse(order)
+	response := dto.NewOrderResponse(order, client.Name)
 	response.Items = itemsResponse
 
 	return response, nil
@@ -177,13 +177,17 @@ func (s *OrderService) FindByID(ctx context.Context, id uuid.UUID) (dto.OrderRes
 		return dto.OrderResponse{}, err
 	}
 
-	items, err := s.itemRepo.FindByOrderID(ctx, order.ID)
-
+	client, err := s.clientRepo.FindByID(ctx, order.ClientID)
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
 
-	response := dto.NewOrderResponse(order)
+	items, err := s.itemRepo.FindByOrderID(ctx, order.ID)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+
+	response := dto.NewOrderResponse(order, client.Name)
 
 	response.Items = make(
 		[]dto.OrderItemResponse,
@@ -192,12 +196,17 @@ func (s *OrderService) FindByID(ctx context.Context, id uuid.UUID) (dto.OrderRes
 	)
 
 	for _, item := range items {
+
+		product, err := s.productRepo.FindByID(ctx, item.ProductID)
+		if err != nil {
+			return dto.OrderResponse{}, err
+		}
+
 		response.Items = append(
 			response.Items,
-			dto.NewOrderItemResponse(item),
+			dto.NewOrderItemResponse(item, product.Name),
 		)
 	}
-
 	return response, nil
 }
 
@@ -215,8 +224,12 @@ func (s *OrderService) FindAll(ctx context.Context, limit int, offset int) ([]dt
 	)
 
 	for _, order := range orders {
+		client, err := s.clientRepo.FindByID(ctx, order.ClientID)
+		if err != nil {
+			return nil, err
+		}
 
-		orderResponse := dto.NewOrderResponse(order)
+		orderResponse := dto.NewOrderResponse(order, client.Name)
 
 		items, err := s.itemRepo.FindByOrderID(ctx, order.ID)
 		if err != nil {
@@ -230,9 +243,13 @@ func (s *OrderService) FindAll(ctx context.Context, limit int, offset int) ([]dt
 		)
 
 		for _, item := range items {
+			product, err := s.productRepo.FindByID(ctx, item.ProductID)
+			if err != nil {
+				return nil, err
+			}
 			orderResponse.Items = append(
 				orderResponse.Items,
-				dto.NewOrderItemResponse(item),
+				dto.NewOrderItemResponse(item, product.Name),
 			)
 		}
 

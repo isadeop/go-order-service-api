@@ -23,13 +23,6 @@ type ClientService struct {
 	repository ClientRepository
 }
 
-//	func NewClientService(repo *repository.ClientRepository) *ClientService {
-//		return &ClientService{
-//			repository: repo,
-//		}
-//	}
-//
-// Alterando o construtor para receber interface, ao invés de receber um ponteiro para a implementação concreta:
 func NewClientService(repo ClientRepository) *ClientService {
 	return &ClientService{
 		repository: repo,
@@ -63,9 +56,7 @@ func (s *ClientService) Create(
 		return dto.ClientResponse{}, custom_errors.ErrClientEmailAlreadyExists
 	}
 
-	if err != nil &&
-		!errors.Is(err, custom_errors.ErrClientNotFound) {
-
+	if !errors.Is(err, custom_errors.ErrClientNotFound) {
 		return dto.ClientResponse{}, err
 	}
 

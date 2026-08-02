@@ -1,10 +1,13 @@
 # go-order-service-api
 # Go Order Service API
 
-API REST simples desenvolvida em Go como atividade avaliativa de fechamento do primeiro módulo em GO.
+API REST simples desenvolvida em Go como atividade avaliativa de fechamento do primeiro e segundo módulos em GO.
 Tema: gerenciamento de clientes, produtos e pedidos.
 
 O projeto foi desenvolvido com foco em aplicar conceitos de arquitetura em camadas (Controller → Service → Repository), validações de regras de negócio, transações com PostgreSQL e organização do código. Não foram implementadas medidas de segurança tendo em vista o objetivo geral de familiarização.
+
+Módulo 1: avaliação do projeto;
+Módulo 2: avaliação de implementação de testes e correções ou melhorias pontuadas pelo professor;
 
 ## Tecnologias
 
@@ -163,6 +166,43 @@ A API pode ser testada utilizando ferramentas como:
 
 ---
 
+# Testes
+
+O projeto possui:
+
+- Testes unitários dos services, cobrindo as regras de negócio (criação, pagamento, cancelamento, validações), sem depender de banco.
+- Testes de integração dos repositories, contra um PostgreSQL real.
+- Testes dos controllers, cobrindo a tradução de cada erro de negócio em status HTTP.
+- Testes de concorrência, validando que operações críticas de pedido (criação e cancelamento) mantêm o estoque e o status consistentes sob concorrência (sem lost update, sem estorno duplicado).
+
+Comandos
+Rodar toda a suíte:
+
+```bash
+go test ./...
+```
+
+Ver cobertura:
+
+```bash
+go test ./... -cover
+```
+
+Cobertura atual por camada:
+
+| Pacote | Cobertura |
+|---|---|
+| `services` | ~87% |
+| `controllers` | ~82% |
+| `repository` | ~82% |
+| `security` | ~80% |
+
+`model`, `dto`, `routes`, `config`, `database` e `cmd` não têm testes próprios pois não apresentam regra de negócio.
+
+Os testes de `repository` e os de concorrência precisam de um PostgreSQL acessível (o mesmo configurado em `.env`/variáveis de ambiente). Se o banco não estiver disponível, esses testes são pulados automaticamente, sem quebrar `go test ./...`.
+
+---
+
 # Estrutura do projeto
 
 ```
@@ -206,9 +246,6 @@ Este projeto foi desenvolvido com fins de estudo e demonstração. Algumas melho
 - Autenticação (JWT)
 - Autorização por perfis (RBAC)
 - Documentação da API (OpenAPI/Swagger)
-- Testes unitários e de integração
-- Redução de repetição de código entre Services e Controllers
-- Centralização do tratamento de erros (middleware)
 - Logging estruturado
 - Cache para consultas frequentes
 - Paginação padronizada

@@ -10,8 +10,12 @@ import (
 	"github.com/isadeop/go-order-service-api/internal/dto"
 	"github.com/isadeop/go-order-service-api/internal/model"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Implementação de interface para substituição por fake nos testes de service
+type ConnPool interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
 
 type OrderRepository interface {
 	Create(ctx context.Context, tx pgx.Tx, order model.Order) (model.Order, error)
@@ -28,14 +32,14 @@ type OrderItemRepository interface {
 }
 
 type OrderService struct {
-	pool        *pgxpool.Pool
+	pool        ConnPool
 	orderRepo   OrderRepository
 	itemRepo    OrderItemRepository
 	productRepo ProductRepository
 	clientRepo  ClientRepository
 }
 
-func NewOrderService(pool *pgxpool.Pool,
+func NewOrderService(pool ConnPool,
 	orderRepo OrderRepository,
 	itemRepo OrderItemRepository,
 	productRepo ProductRepository,

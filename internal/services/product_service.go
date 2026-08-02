@@ -6,12 +6,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/dto"
 	"github.com/isadeop/go-order-service-api/internal/model"
-	"github.com/isadeop/go-order-service-api/internal/repository"
 )
 
 type ProductRepository interface {
@@ -26,11 +24,11 @@ type ProductRepository interface {
 }
 
 type ProductService struct {
-	pool       *pgxpool.Pool
+	pool       ConnPool
 	repository ProductRepository
 }
 
-func NewProductService(pool *pgxpool.Pool, repo *repository.ProductRepository) *ProductService {
+func NewProductService(pool ConnPool, repo ProductRepository) *ProductService {
 	return &ProductService{
 		pool:       pool,
 		repository: repo,
@@ -68,9 +66,7 @@ func (s *ProductService) Create(
 		return dto.ProductResponse{}, custom_errors.ErrProductNameExists
 	}
 
-	if err != nil &&
-		!errors.Is(err, custom_errors.ErrProductNotFound) {
-
+	if !errors.Is(err, custom_errors.ErrProductNotFound) {
 		return dto.ProductResponse{}, err
 	}
 

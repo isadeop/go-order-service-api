@@ -82,13 +82,13 @@ Ajuste a string de conexão conforme necessário.
 Aplicar todas as migrations:
 
 ```bash
-migrate -database "postgres://adm:adm@localhost:5432/orderserviceapi?sslmode=disable" -path migrations up
+migrate -database "postgres://adm:adm@localhost:5432/orderserviceapi?sslmode=disable" -path internal/migrations up
 ```
 
 Remover todas as migrations:
 
 ```bash
-migrate -database "postgres://adm:adm@localhost:5432/orderserviceapi?sslmode=disable" -path migrations down -all
+migrate -database "postgres://adm:adm@localhost:5432/orderserviceapi?sslmode=disable" -path internal/migrations down -all
 ```
 
 ---

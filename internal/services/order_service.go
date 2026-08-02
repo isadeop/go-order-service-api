@@ -16,6 +16,7 @@ import (
 type OrderRepository interface {
 	Create(ctx context.Context, tx pgx.Tx, order model.Order) (model.Order, error)
 	FindByID(ctx context.Context, id uuid.UUID) (model.Order, error)
+	FindByIDForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (model.Order, error)
 	FindAll(ctx context.Context, limit int, offset int) ([]model.Order, error)
 	UpdateTotal(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, total float64) error
 	UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status model.OrderStatus) (model.Order, error)
@@ -89,9 +90,8 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 		return dto.OrderResponse{}, err
 	}
 
-	var total float64
-
-	itemsResponse := make([]dto.OrderItemResponse, 0)
+	products := make(map[uuid.UUID]model.Product)
+	quantities := make(map[uuid.UUID]int)
 
 	for _, itemRequest := range request.Items {
 		if itemRequest.ProductID == uuid.Nil {
@@ -109,21 +109,38 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 				custom_errors.ErrOrderItemQuantityInvalid
 		}
 
-		product, err := s.productRepo.FindByID(ctx, itemRequest.ProductID)
+		product, alreadyLocked := products[itemRequest.ProductID]
 
-		if errors.Is(err, custom_errors.ErrProductNotFound) {
-			return dto.OrderResponse{},
-				custom_errors.ErrOrderProductNotFound
+		if !alreadyLocked {
+			product, err = s.productRepo.FindByIDForUpdate(ctx, tx, itemRequest.ProductID)
+
+			if errors.Is(err, custom_errors.ErrProductNotFound) {
+				return dto.OrderResponse{},
+					custom_errors.ErrOrderProductNotFound
+			}
+
+			if err != nil {
+				return dto.OrderResponse{}, err
+			}
+
+			products[itemRequest.ProductID] = product
 		}
 
-		if err != nil {
-			return dto.OrderResponse{}, err
-		}
+		quantities[itemRequest.ProductID] += *itemRequest.Quantity
 
-		if product.Stock < *itemRequest.Quantity {
+		if quantities[itemRequest.ProductID] > product.Stock {
 			return dto.OrderResponse{},
 				custom_errors.ErrInsufficientStock
 		}
+	}
+
+	var total float64
+
+	itemsResponse := make([]dto.OrderItemResponse, 0, len(request.Items))
+
+	for _, itemRequest := range request.Items {
+
+		product := products[itemRequest.ProductID]
 
 		itemTotal := product.Price * float64(*itemRequest.Quantity)
 
@@ -140,14 +157,17 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 			return dto.OrderResponse{}, err
 		}
 
-		err = s.productRepo.UpdateStock(ctx, tx, product.ID, product.Stock-*itemRequest.Quantity)
+		total += itemTotal
+		itemsResponse = append(itemsResponse, dto.NewOrderItemResponse(item, product.Name))
+	}
+
+	for productID, quantity := range quantities {
+
+		err = s.productRepo.UpdateStock(ctx, tx, productID, -quantity)
 
 		if err != nil {
 			return dto.OrderResponse{}, err
 		}
-
-		total += itemTotal
-		itemsResponse = append(itemsResponse, dto.NewOrderItemResponse(item, product.Name))
 	}
 
 	err = s.orderRepo.UpdateTotal(ctx, tx, order.ID, total)
@@ -261,21 +281,23 @@ func (s *OrderService) FindAll(ctx context.Context, limit int, offset int) ([]dt
 	return response, nil
 }
 
-func (s *OrderService) UpdateStatus(ctx context.Context, id uuid.UUID, status model.OrderStatus) (dto.OrderResponse, error) {
+func (s *OrderService) refundItemsStock(ctx context.Context, tx pgx.Tx, orderID uuid.UUID) error {
 
-	order, err := s.orderRepo.FindByID(ctx, id)
+	items, err := s.itemRepo.FindByOrderID(ctx, orderID)
 	if err != nil {
-		return dto.OrderResponse{}, err
+		return err
 	}
 
-	switch order.Status {
-	case model.OrderStatusPaid:
-		return dto.OrderResponse{},
-			custom_errors.ErrOrderAlreadyPaid
-	case model.OrderStatusCanceled:
-		return dto.OrderResponse{},
-			custom_errors.ErrOrderAlreadyCanceled
+	for _, item := range items {
+		if err := s.productRepo.UpdateStock(ctx, tx, item.ProductID, item.Quantity); err != nil {
+			return err
+		}
 	}
+
+	return nil
+}
+
+func (s *OrderService) UpdateStatus(ctx context.Context, id uuid.UUID, status model.OrderStatus) (dto.OrderResponse, error) {
 
 	if status != model.OrderStatusPaid && status != model.OrderStatusCanceled {
 		return dto.OrderResponse{},
@@ -289,25 +311,23 @@ func (s *OrderService) UpdateStatus(ctx context.Context, id uuid.UUID, status mo
 
 	defer tx.Rollback(ctx)
 
+	order, err := s.orderRepo.FindByIDForUpdate(ctx, tx, id)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+
+	switch order.Status {
+	case model.OrderStatusPaid:
+		return dto.OrderResponse{},
+			custom_errors.ErrOrderAlreadyPaid
+	case model.OrderStatusCanceled:
+		return dto.OrderResponse{},
+			custom_errors.ErrOrderAlreadyCanceled
+	}
+
 	if status == model.OrderStatusCanceled {
-
-		items, err := s.itemRepo.FindByOrderID(ctx, order.ID)
-		if err != nil {
+		if err := s.refundItemsStock(ctx, tx, order.ID); err != nil {
 			return dto.OrderResponse{}, err
-		}
-
-		for _, item := range items {
-			product, err := s.productRepo.FindByID(ctx, item.ProductID)
-			if err != nil {
-				return dto.OrderResponse{}, err
-			}
-
-			newStock := product.Stock + item.Quantity
-
-			err = s.productRepo.UpdateStock(ctx, tx, product.ID, newStock)
-			if err != nil {
-				return dto.OrderResponse{}, err
-			}
 		}
 	}
 
@@ -325,7 +345,14 @@ func (s *OrderService) UpdateStatus(ctx context.Context, id uuid.UUID, status mo
 
 func (s *OrderService) Pay(ctx context.Context, id uuid.UUID) (dto.OrderResponse, error) {
 
-	order, err := s.orderRepo.FindByID(ctx, id)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+
+	defer tx.Rollback(ctx)
+
+	order, err := s.orderRepo.FindByIDForUpdate(ctx, tx, id)
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
@@ -338,13 +365,6 @@ func (s *OrderService) Pay(ctx context.Context, id uuid.UUID) (dto.OrderResponse
 		return dto.OrderResponse{},
 			custom_errors.ErrOrderCannotChangeStatus
 	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return dto.OrderResponse{}, err
-	}
-
-	defer tx.Rollback(ctx)
 
 	order, err = s.orderRepo.UpdateStatus(ctx, tx, id, model.OrderStatusPaid)
 	if err != nil {
@@ -359,7 +379,13 @@ func (s *OrderService) Pay(ctx context.Context, id uuid.UUID) (dto.OrderResponse
 
 func (s *OrderService) Cancel(ctx context.Context, id uuid.UUID) (dto.OrderResponse, error) {
 
-	order, err := s.orderRepo.FindByID(ctx, id)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	order, err := s.orderRepo.FindByIDForUpdate(ctx, tx, id)
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
@@ -373,27 +399,8 @@ func (s *OrderService) Cancel(ctx context.Context, id uuid.UUID) (dto.OrderRespo
 			custom_errors.ErrOrderCannotChangeStatus
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
+	if err := s.refundItemsStock(ctx, tx, order.ID); err != nil {
 		return dto.OrderResponse{}, err
-	}
-	defer tx.Rollback(ctx)
-
-	items, err := s.itemRepo.FindByOrderID(ctx, order.ID)
-	if err != nil {
-		return dto.OrderResponse{}, err
-	}
-
-	for _, item := range items {
-		product, err := s.productRepo.FindByID(ctx, item.ProductID)
-		if err != nil {
-			return dto.OrderResponse{}, err
-		}
-		newStock := product.Stock + item.Quantity
-		err = s.productRepo.UpdateStock(ctx, tx, product.ID, newStock)
-		if err != nil {
-			return dto.OrderResponse{}, err
-		}
 	}
 
 	order, err = s.orderRepo.UpdateStatus(ctx, tx, id, model.OrderStatusCanceled)

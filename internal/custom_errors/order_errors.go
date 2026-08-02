@@ -15,3 +15,4 @@ var ErrOrderAlreadyCanceled = errors.New("order is already canceled / pedido já
 var ErrOrderCannotChangeStatus = errors.New("paid or canceled orders cannot change status / pedidos pagos ou cancelados não podem alterar o status")
 var ErrOrderPaymentFailed = errors.New("order payment failed / pagamento do pedido falhou")
 var ErrOrderCancellationFailed = errors.New("order cancellation failed / cancelamento do pedido falhou")
+var ErrInvalidPagination = errors.New("limit and offset must be valid positive integers / limit e offset devem ser inteiros válidos e positivos")

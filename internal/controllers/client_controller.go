@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
@@ -63,8 +62,7 @@ func (c *ClientController) CreateClient(
 
 	var request dto.CreateClientRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "json inválido", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &request) {
 		return
 	}
 
@@ -107,7 +105,7 @@ func (c *ClientController) FindClientByID(
 	r *http.Request,
 ) {
 
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := parseIDParam(r)
 
 	if err != nil {
 		writeClientError(w, custom_errors.ErrInvalidClientID)

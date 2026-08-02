@@ -9,7 +9,6 @@ import (
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/dto"
 	"github.com/isadeop/go-order-service-api/internal/model"
-	"github.com/isadeop/go-order-service-api/internal/repository"
 	"github.com/isadeop/go-order-service-api/internal/security"
 )
 
@@ -24,7 +23,14 @@ type ClientService struct {
 	repository ClientRepository
 }
 
-func NewClientService(repo *repository.ClientRepository) *ClientService {
+//	func NewClientService(repo *repository.ClientRepository) *ClientService {
+//		return &ClientService{
+//			repository: repo,
+//		}
+//	}
+//
+// Alterando o construtor para receber interface, ao invés de receber um ponteiro para a implementação concreta:
+func NewClientService(repo ClientRepository) *ClientService {
 	return &ClientService{
 		repository: repo,
 	}

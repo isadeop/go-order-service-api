@@ -58,6 +58,18 @@ const (
 		WHERE id = $1
 	`
 
+	findOrderByIDForUpdateQuery = `
+		SELECT
+			id,
+			client_id,
+			status,
+			total,
+			created_at
+		FROM orders
+		WHERE id = $1
+		FOR UPDATE
+	`
+
 	updateOrderTotalQuery = `
 		UPDATE orders
 		SET total = $2
@@ -139,6 +151,37 @@ func (repo *OrderRepository) FindByID(
 
 	if err != nil {
 		return model.Order{}, fmt.Errorf("find order by id: %w", err)
+	}
+
+	return order, nil
+}
+
+func (repo *OrderRepository) FindByIDForUpdate(
+	ctx context.Context,
+	tx pgx.Tx,
+	id uuid.UUID,
+) (model.Order, error) {
+
+	var order model.Order
+
+	err := tx.QueryRow(
+		ctx,
+		findOrderByIDForUpdateQuery,
+		id,
+	).Scan(
+		&order.ID,
+		&order.ClientID,
+		&order.Status,
+		&order.Total,
+		&order.CreatedAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.Order{}, custom_errors.ErrOrderNotFound
+	}
+
+	if err != nil {
+		return model.Order{}, fmt.Errorf("find order by id for update: %w", err)
 	}
 
 	return order, nil

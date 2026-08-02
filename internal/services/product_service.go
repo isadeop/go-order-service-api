@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/dto"
@@ -17,18 +18,21 @@ type ProductRepository interface {
 	Create(ctx context.Context, client model.Product) (model.Product, error)
 	FindAll(ctx context.Context) ([]model.Product, error)
 	FindByID(ctx context.Context, id uuid.UUID) (model.Product, error)
+	FindByIDForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (model.Product, error)
 	FindByName(ctx context.Context, name string) (model.Product, error)
-	Update(ctx context.Context, id uuid.UUID, product model.Product) (model.Product, error)
-	UpdateStock(ctx context.Context, tx pgx.Tx, productID uuid.UUID, stock int) error
+	Update(ctx context.Context, tx pgx.Tx, id uuid.UUID, product model.Product) (model.Product, error)
+	UpdateStock(ctx context.Context, tx pgx.Tx, productID uuid.UUID, delta int) error
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
 type ProductService struct {
+	pool       *pgxpool.Pool
 	repository ProductRepository
 }
 
-func NewProductService(repo *repository.ProductRepository) *ProductService {
+func NewProductService(pool *pgxpool.Pool, repo *repository.ProductRepository) *ProductService {
 	return &ProductService{
+		pool:       pool,
 		repository: repo,
 	}
 }
@@ -153,13 +157,28 @@ func (s *ProductService) Update(
 		Stock: *request.Stock,
 	}
 
-	product, err := s.repository.Update(
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return dto.ProductResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := s.repository.FindByIDForUpdate(ctx, tx, id); err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	product, err = s.repository.Update(
 		ctx,
+		tx,
 		id,
 		product,
 	)
 
 	if err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return dto.ProductResponse{}, err
 	}
 

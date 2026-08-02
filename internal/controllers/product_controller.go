@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
@@ -65,8 +64,7 @@ func (c *ProductController) CreateProduct(
 
 	var request dto.CreateProductRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "json inválido", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &request) {
 		return
 	}
 
@@ -109,7 +107,7 @@ func (c *ProductController) FindProductByID(
 	r *http.Request,
 ) {
 
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := parseIDParam(r)
 
 	if err != nil {
 		writeProductError(w, custom_errors.ErrInvalidProductID)
@@ -135,7 +133,7 @@ func (c *ProductController) UpdateProduct(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := parseIDParam(r)
 	if err != nil {
 		writeProductError(w, custom_errors.ErrInvalidProductID)
 		return
@@ -143,8 +141,7 @@ func (c *ProductController) UpdateProduct(
 
 	var request dto.UpdateProductRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "json inválido", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &request) {
 		return
 	}
 
@@ -168,7 +165,7 @@ func (c *ProductController) DeleteProduct(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := parseIDParam(r)
 	if err != nil {
 		writeProductError(w, custom_errors.ErrInvalidProductID)
 		return

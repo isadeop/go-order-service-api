@@ -40,6 +40,13 @@ const (
 		WHERE name = $1
 	`
 
+	findProductByIDForUpdateQuery = `
+		SELECT id, name, price, stock
+		FROM products
+		WHERE id = $1
+		FOR UPDATE
+	`
+
 	updateProductQuery = `
 		UPDATE products
 		SET
@@ -53,9 +60,9 @@ const (
 	updateProductStockQuery = `
 	UPDATE products
 	SET
-		stock = $2,
+		stock = stock + $2,
 		updated_at = now()
-	WHERE id = $1
+	WHERE id = $1 AND stock + $2 >= 0
 	`
 	deleteProductQuery = `
 		DELETE FROM products
@@ -150,6 +157,28 @@ func (repo *ProductRepository) FindByID(ctx context.Context, id uuid.UUID) (mode
 	return product, nil
 }
 
+func (repo *ProductRepository) FindByIDForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (model.Product, error) {
+
+	var product model.Product
+
+	err := tx.QueryRow(ctx, findProductByIDForUpdateQuery, id).Scan(
+		&product.ID,
+		&product.Name,
+		&product.Price,
+		&product.Stock,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.Product{}, custom_errors.ErrProductNotFound
+	}
+
+	if err != nil {
+		return model.Product{}, fmt.Errorf("find product by id for update: %w", err)
+	}
+
+	return product, nil
+}
+
 func (repo *ProductRepository) FindByName(ctx context.Context, name string) (model.Product, error) {
 
 	var product model.Product
@@ -172,9 +201,9 @@ func (repo *ProductRepository) FindByName(ctx context.Context, name string) (mod
 	return product, nil
 }
 
-func (repo *ProductRepository) Update(ctx context.Context, id uuid.UUID, product model.Product) (model.Product, error) {
+func (repo *ProductRepository) Update(ctx context.Context, tx pgx.Tx, id uuid.UUID, product model.Product) (model.Product, error) {
 
-	err := repo.pool.QueryRow(
+	err := tx.QueryRow(
 		ctx,
 		updateProductQuery,
 		id,
@@ -203,14 +232,14 @@ func (repo *ProductRepository) UpdateStock(
 	ctx context.Context,
 	tx pgx.Tx,
 	productID uuid.UUID,
-	stock int,
+	delta int,
 ) error {
 
 	commandTag, err := tx.Exec(
 		ctx,
 		updateProductStockQuery,
 		productID,
-		stock,
+		delta,
 	)
 
 	if err != nil {
@@ -218,6 +247,9 @@ func (repo *ProductRepository) UpdateStock(
 	}
 
 	if commandTag.RowsAffected() == 0 {
+		if delta < 0 {
+			return custom_errors.ErrInsufficientStock
+		}
 		return custom_errors.ErrProductNotFound
 	}
 

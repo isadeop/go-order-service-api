@@ -49,7 +49,7 @@ func main() {
 		repository.NewProductRepository(pool)
 
 	productService :=
-		services.NewProductService(productRepository)
+		services.NewProductService(pool, productRepository)
 
 	productController :=
 		controllers.NewProductController(productService)

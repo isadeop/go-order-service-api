@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
@@ -44,13 +43,14 @@ func writeOrderError(w http.ResponseWriter, err error) {
 
 	case errors.Is(err, custom_errors.ErrOrderClientRequired),
 		errors.Is(err, custom_errors.ErrOrderItemsRequired),
-		errors.Is(err, custom_errors.ErrOrderProductNotFound),
 		errors.Is(err, custom_errors.ErrOrderItemProductRequired),
 		errors.Is(err, custom_errors.ErrOrderItemQuantityRequired),
-		errors.Is(err, custom_errors.ErrOrderItemQuantityInvalid):
+		errors.Is(err, custom_errors.ErrOrderItemQuantityInvalid),
+		errors.Is(err, custom_errors.ErrInvalidPagination):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 
-	case errors.Is(err, custom_errors.ErrOrderClientNotFound):
+	case errors.Is(err, custom_errors.ErrOrderClientNotFound),
+		errors.Is(err, custom_errors.ErrOrderProductNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
 
 	case errors.Is(err, custom_errors.ErrInsufficientStock):
@@ -74,9 +74,7 @@ func (c *OrderController) CreateOrder(w http.ResponseWriter, r *http.Request) {
 
 	var request dto.CreateOrderRequest
 
-	err := json.NewDecoder(r.Body).Decode(&request)
-	if err != nil {
-		http.Error(w, "json inválido", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &request) {
 		return
 	}
 
@@ -94,7 +92,7 @@ func (c *OrderController) CreateOrder(w http.ResponseWriter, r *http.Request) {
 
 func (c *OrderController) FindOrderByID(w http.ResponseWriter, r *http.Request) {
 
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := parseIDParam(r)
 	if err != nil {
 		writeOrderError(w, custom_errors.ErrInvalidOrderID)
 		return
@@ -116,10 +114,21 @@ func (c *OrderController) FindOrders(w http.ResponseWriter, r *http.Request) {
 	offset := 0
 
 	if value := r.URL.Query().Get("limit"); value != "" {
-		fmt.Sscanf(value, "%d", &limit)
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			writeOrderError(w, custom_errors.ErrInvalidPagination)
+			return
+		}
+		limit = parsed
 	}
+
 	if value := r.URL.Query().Get("offset"); value != "" {
-		fmt.Sscanf(value, "%d", &offset)
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 {
+			writeOrderError(w, custom_errors.ErrInvalidPagination)
+			return
+		}
+		offset = parsed
 	}
 
 	response, err := c.service.FindAll(r.Context(), limit, offset)
@@ -134,7 +143,7 @@ func (c *OrderController) FindOrders(w http.ResponseWriter, r *http.Request) {
 
 func (c *OrderController) UpdateOrderStatus(w http.ResponseWriter, r *http.Request) {
 
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := parseIDParam(r)
 	if err != nil {
 		writeOrderError(w, custom_errors.ErrInvalidOrderID)
 		return
@@ -144,9 +153,7 @@ func (c *OrderController) UpdateOrderStatus(w http.ResponseWriter, r *http.Reque
 		Status model.OrderStatus `json:"status"`
 	}
 
-	err = json.NewDecoder(r.Body).Decode(&request)
-	if err != nil {
-		http.Error(w, "json inválido", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &request) {
 		return
 	}
 
@@ -162,7 +169,7 @@ func (c *OrderController) UpdateOrderStatus(w http.ResponseWriter, r *http.Reque
 
 func (c *OrderController) Pay(w http.ResponseWriter, r *http.Request) {
 
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := parseIDParam(r)
 	if err != nil {
 		writeOrderError(w, custom_errors.ErrInvalidOrderID)
 		return
@@ -180,7 +187,7 @@ func (c *OrderController) Pay(w http.ResponseWriter, r *http.Request) {
 
 func (c *OrderController) Cancel(w http.ResponseWriter, r *http.Request) {
 
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := parseIDParam(r)
 	if err != nil {
 		writeOrderError(w, custom_errors.ErrInvalidOrderID)
 		return

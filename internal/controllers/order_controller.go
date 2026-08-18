@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -32,7 +32,7 @@ func NewOrderController(service OrderService) *OrderController {
 	return &OrderController{service: service}
 }
 
-func writeOrderError(w http.ResponseWriter, err error) {
+func writeOrderError(w http.ResponseWriter, operation string, err error) {
 
 	switch {
 	case errors.Is(err, custom_errors.ErrInvalidOrderID):
@@ -65,7 +65,11 @@ func writeOrderError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 
 	default:
-		log.Printf("internal order error: %v", err)
+		slog.Error("order.internal_error",
+			"operation", operation,
+			"result", "error",
+			"err", err.Error(),
+		)
 		http.Error(w, "erro interno do servidor", http.StatusInternalServerError)
 	}
 }
@@ -80,7 +84,7 @@ func (c *OrderController) CreateOrder(w http.ResponseWriter, r *http.Request) {
 
 	response, err := c.service.Create(r.Context(), request)
 	if err != nil {
-		writeOrderError(w, err)
+		writeOrderError(w, "CreateOrder", err)
 
 		return
 	}
@@ -94,13 +98,13 @@ func (c *OrderController) FindOrderByID(w http.ResponseWriter, r *http.Request) 
 
 	id, err := parseIDParam(r)
 	if err != nil {
-		writeOrderError(w, custom_errors.ErrInvalidOrderID)
+		writeOrderError(w, "FindOrderByID", custom_errors.ErrInvalidOrderID)
 		return
 	}
 
 	response, err := c.service.FindByID(r.Context(), id)
 	if err != nil {
-		writeOrderError(w, err)
+		writeOrderError(w, "FindOrderByID", err)
 		return
 	}
 
@@ -116,7 +120,7 @@ func (c *OrderController) FindOrders(w http.ResponseWriter, r *http.Request) {
 	if value := r.URL.Query().Get("limit"); value != "" {
 		parsed, err := strconv.Atoi(value)
 		if err != nil || parsed <= 0 {
-			writeOrderError(w, custom_errors.ErrInvalidPagination)
+			writeOrderError(w, "FindOrders", custom_errors.ErrInvalidPagination)
 			return
 		}
 		limit = parsed
@@ -125,7 +129,7 @@ func (c *OrderController) FindOrders(w http.ResponseWriter, r *http.Request) {
 	if value := r.URL.Query().Get("offset"); value != "" {
 		parsed, err := strconv.Atoi(value)
 		if err != nil || parsed < 0 {
-			writeOrderError(w, custom_errors.ErrInvalidPagination)
+			writeOrderError(w, "FindOrders", custom_errors.ErrInvalidPagination)
 			return
 		}
 		offset = parsed
@@ -133,7 +137,7 @@ func (c *OrderController) FindOrders(w http.ResponseWriter, r *http.Request) {
 
 	response, err := c.service.FindAll(r.Context(), limit, offset)
 	if err != nil {
-		writeOrderError(w, err)
+		writeOrderError(w, "FindOrders", err)
 		return
 	}
 
@@ -145,7 +149,7 @@ func (c *OrderController) UpdateOrderStatus(w http.ResponseWriter, r *http.Reque
 
 	id, err := parseIDParam(r)
 	if err != nil {
-		writeOrderError(w, custom_errors.ErrInvalidOrderID)
+		writeOrderError(w, "UpdateOrderStatus", custom_errors.ErrInvalidOrderID)
 		return
 	}
 
@@ -159,7 +163,7 @@ func (c *OrderController) UpdateOrderStatus(w http.ResponseWriter, r *http.Reque
 
 	response, err := c.service.UpdateStatus(r.Context(), id, request.Status)
 	if err != nil {
-		writeOrderError(w, err)
+		writeOrderError(w, "UpdateOrderStatus", err)
 		return
 	}
 
@@ -171,13 +175,13 @@ func (c *OrderController) Pay(w http.ResponseWriter, r *http.Request) {
 
 	id, err := parseIDParam(r)
 	if err != nil {
-		writeOrderError(w, custom_errors.ErrInvalidOrderID)
+		writeOrderError(w, "Pay", custom_errors.ErrInvalidOrderID)
 		return
 	}
 
 	response, err := c.service.Pay(r.Context(), id)
 	if err != nil {
-		writeOrderError(w, err)
+		writeOrderError(w, "Pay", err)
 		return
 	}
 
@@ -189,13 +193,13 @@ func (c *OrderController) Cancel(w http.ResponseWriter, r *http.Request) {
 
 	id, err := parseIDParam(r)
 	if err != nil {
-		writeOrderError(w, custom_errors.ErrInvalidOrderID)
+		writeOrderError(w, "Cancel", custom_errors.ErrInvalidOrderID)
 		return
 	}
 
 	response, err := c.service.Cancel(r.Context(), id)
 	if err != nil {
-		writeOrderError(w, err)
+		writeOrderError(w, "Cancel", err)
 		return
 	}
 

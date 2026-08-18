@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -29,7 +29,7 @@ func NewClientController(service ClientService) *ClientController {
 	}
 }
 
-func writeClientError(w http.ResponseWriter, err error) {
+func writeClientError(w http.ResponseWriter, operation string, err error) {
 
 	switch {
 
@@ -50,7 +50,11 @@ func writeClientError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 
 	default:
-		log.Printf("internal error: %v", err)
+		slog.Error("client.internal_error",
+			"operation", operation,
+			"result", "error",
+			"err", err.Error(),
+		)
 		http.Error(w, "erro interno do servidor", http.StatusInternalServerError)
 	}
 }
@@ -72,8 +76,12 @@ func (c *ClientController) CreateClient(
 	)
 
 	if err != nil {
-		log.Println("erro ao criar cliente:", err)
-		writeClientError(w, err)
+		slog.Warn("client.create_failed",
+			"operation", "CreateClient",
+			"result", "error",
+			"err", err.Error(),
+		)
+		writeClientError(w, "CreateClient", err)
 		return
 	}
 
@@ -91,7 +99,7 @@ func (c *ClientController) FindAllClients(
 	response, err := c.service.FindAll(r.Context())
 
 	if err != nil {
-		writeClientError(w, err)
+		writeClientError(w, "FindAllClients", err)
 		return
 	}
 
@@ -108,7 +116,7 @@ func (c *ClientController) FindClientByID(
 	id, err := parseIDParam(r)
 
 	if err != nil {
-		writeClientError(w, custom_errors.ErrInvalidClientID)
+		writeClientError(w, "FindClientByID", custom_errors.ErrInvalidClientID)
 		return
 	}
 
@@ -118,7 +126,7 @@ func (c *ClientController) FindClientByID(
 	)
 
 	if err != nil {
-		writeClientError(w, err)
+		writeClientError(w, "FindClientByID", err)
 		return
 	}
 

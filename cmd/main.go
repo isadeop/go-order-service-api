@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/isadeop/go-order-service-api/internal/config"
 	"github.com/isadeop/go-order-service-api/internal/controllers"
 	"github.com/isadeop/go-order-service-api/internal/database"
+	"github.com/isadeop/go-order-service-api/internal/observability"
 	"github.com/isadeop/go-order-service-api/internal/repository"
 	"github.com/isadeop/go-order-service-api/internal/routes"
 	"github.com/isadeop/go-order-service-api/internal/services"
@@ -17,6 +19,8 @@ import (
 )
 
 func main() {
+
+	observability.SetDefaultLogger()
 
 	ctx := context.Background()
 
@@ -28,10 +32,12 @@ func main() {
 	)
 
 	if err != nil {
-		log.Fatalf(
-			"error connecting with database | erro ao conectar no banco: %v",
-			err,
+		slog.Error("database.connect_failed",
+			"operation", "startup",
+			"result", "error",
+			"err", err.Error(),
 		)
+		os.Exit(1)
 	}
 
 	defer pool.Close()
@@ -77,7 +83,8 @@ func main() {
 
 	r := chi.NewRouter()
 
-	r.Use(middleware.Logger)
+	r.Use(middleware.RequestID)
+	r.Use(observability.RequestLogger)
 	r.Use(middleware.Recoverer)
 
 	routes.ClientRoutes(
@@ -95,36 +102,41 @@ func main() {
 		orderController,
 	)
 
-	log.Printf(
-		"API rodando em http://localhost:%s",
-		cfg.Port,
+	slog.Info("server.starting",
+		"operation", "startup",
+		"port", cfg.Port,
 	)
 
-	log.Println("POST   /clientes       ->  create client | criar cliente")
-	log.Println("GET    /clientes       -> list clients | listar clientes")
-	log.Println("GET    /clientes/{id}  -> search by id | buscar por id")
-
-	log.Println("POST   /produtos       ->  create product | criar produto")
-	log.Println("GET    /produtos       -> list products | listar produtos")
-	log.Println("GET    /produtos/{id}  -> search product by id | buscar produto por id")
-	log.Println("PUT    /produtos/{id}  -> update product by id | atualizar produto por id")
-	log.Println("DELETE    /produtos/{id}  -> delete product by id | deletar produto por id")
-
-	log.Println("POST   /pedidos       ->  create order | criar pedido")
-	log.Println("GET    /pedidos?limit=10&offset=0       -> list order | listar pedidos")
-	log.Println("GET    /pedidos/{id}  -> search order by id | buscar pedido por id")
-	log.Println("PATCH   /pedidos/{id}/status  -> update order status by id | atualizar status do pedido por id")
-	log.Println("POST   /pedidos/{id}/pagar       ->  update order status to paid | atualizar status do pedido para paid (pago)")
-	log.Println("POST   /pedidos/{id}/cancelar       ->  update order status to canceled | atualizar status do pedido para canceled (cancelado)")
+	slog.Info("server.routes_registered",
+		"operation", "startup",
+		"routes", []string{
+			"POST /clientes",
+			"GET /clientes",
+			"GET /clientes/{id}",
+			"POST /produtos",
+			"GET /produtos",
+			"GET /produtos/{id}",
+			"PUT /produtos/{id}",
+			"DELETE /produtos/{id}",
+			"POST /pedidos",
+			"GET /pedidos?limit=10&offset=0",
+			"GET /pedidos/{id}",
+			"PATCH /pedidos/{id}/status",
+			"POST /pedidos/{id}/pagar",
+			"POST /pedidos/{id}/cancelar",
+		},
+	)
 
 	if err := http.ListenAndServe(
 		":"+cfg.Port,
 		r,
 	); err != nil {
 
-		log.Fatalf(
-			"error initializing server | erro ao iniciar servidor: %v",
-			err,
+		slog.Error("server.listen_failed",
+			"operation", "startup",
+			"result", "error",
+			"err", err.Error(),
 		)
+		os.Exit(1)
 	}
 }

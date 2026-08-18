@@ -29,8 +29,6 @@ func Load() Config {
 		log.Println("arquivo .env nao encontrado, usando variaveis do ambiente")
 	}
 
-	//Projeto para estudo de CRUD integrado com banco
-	//Segurança inicialmente ignorada
 	database := DatabaseConfig{
 		Host:     getEnv("POSTGRES_HOST", "localhost"),
 		Port:     getEnv("POSTGRES_PORT", "5432"),

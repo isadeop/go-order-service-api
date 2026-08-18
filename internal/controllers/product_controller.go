@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -31,7 +31,7 @@ func NewProductController(service ProductService) *ProductController {
 	}
 }
 
-func writeProductError(w http.ResponseWriter, err error) {
+func writeProductError(w http.ResponseWriter, operation string, err error) {
 
 	switch {
 	case errors.Is(err, custom_errors.ErrInvalidProductID):
@@ -52,7 +52,11 @@ func writeProductError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 
 	default:
-		log.Printf("internal error: %v", err)
+		slog.Error("product.internal_error",
+			"operation", operation,
+			"result", "error",
+			"err", err.Error(),
+		)
 		http.Error(w, "internal error / erro interno do servidor", http.StatusInternalServerError)
 	}
 }
@@ -74,8 +78,12 @@ func (c *ProductController) CreateProduct(
 	)
 
 	if err != nil {
-		log.Println("erro ao criar produto:", err)
-		writeProductError(w, err)
+		slog.Warn("product.create_failed",
+			"operation", "CreateProduct",
+			"result", "error",
+			"err", err.Error(),
+		)
+		writeProductError(w, "CreateProduct", err)
 		return
 	}
 
@@ -93,7 +101,7 @@ func (c *ProductController) FindAllProducts(
 	response, err := c.service.FindAll(r.Context())
 
 	if err != nil {
-		writeProductError(w, err)
+		writeProductError(w, "FindAllProducts", err)
 		return
 	}
 
@@ -110,7 +118,7 @@ func (c *ProductController) FindProductByID(
 	id, err := parseIDParam(r)
 
 	if err != nil {
-		writeProductError(w, custom_errors.ErrInvalidProductID)
+		writeProductError(w, "FindProductByID", custom_errors.ErrInvalidProductID)
 		return
 	}
 
@@ -120,7 +128,7 @@ func (c *ProductController) FindProductByID(
 	)
 
 	if err != nil {
-		writeProductError(w, err)
+		writeProductError(w, "FindProductByID", err)
 		return
 	}
 
@@ -135,7 +143,7 @@ func (c *ProductController) UpdateProduct(
 ) {
 	id, err := parseIDParam(r)
 	if err != nil {
-		writeProductError(w, custom_errors.ErrInvalidProductID)
+		writeProductError(w, "UpdateProduct", custom_errors.ErrInvalidProductID)
 		return
 	}
 
@@ -152,7 +160,7 @@ func (c *ProductController) UpdateProduct(
 	)
 
 	if err != nil {
-		writeProductError(w, err)
+		writeProductError(w, "UpdateProduct", err)
 		return
 	}
 
@@ -167,7 +175,7 @@ func (c *ProductController) DeleteProduct(
 ) {
 	id, err := parseIDParam(r)
 	if err != nil {
-		writeProductError(w, custom_errors.ErrInvalidProductID)
+		writeProductError(w, "DeleteProduct", custom_errors.ErrInvalidProductID)
 		return
 	}
 
@@ -177,7 +185,7 @@ func (c *ProductController) DeleteProduct(
 	)
 
 	if err != nil {
-		writeProductError(w, err)
+		writeProductError(w, "DeleteProduct", err)
 		return
 	}
 

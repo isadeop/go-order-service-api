@@ -9,25 +9,24 @@ import (
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/dto"
 	"github.com/isadeop/go-order-service-api/internal/model"
-	"github.com/jackc/pgx/v5"
+	"github.com/isadeop/go-order-service-api/internal/txport"
 )
 
-// Implementação de interface para substituição por fake nos testes de service
-type ConnPool interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
+// Tx e ConnPool são aliases para o contrato compartilhado em txport
+type Tx = txport.Tx
+type ConnPool = txport.ConnPool
 
 type OrderRepository interface {
-	Create(ctx context.Context, tx pgx.Tx, order model.Order) (model.Order, error)
+	Create(ctx context.Context, tx Tx, order model.Order) (model.Order, error)
 	FindByID(ctx context.Context, id uuid.UUID) (model.Order, error)
-	FindByIDForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (model.Order, error)
+	FindByIDForUpdate(ctx context.Context, tx Tx, id uuid.UUID) (model.Order, error)
 	FindAll(ctx context.Context, limit int, offset int) ([]model.Order, error)
-	UpdateTotal(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, total float64) error
-	UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status model.OrderStatus) (model.Order, error)
+	UpdateTotal(ctx context.Context, tx Tx, orderID uuid.UUID, total float64) error
+	UpdateStatus(ctx context.Context, tx Tx, id uuid.UUID, status model.OrderStatus) (model.Order, error)
 }
 
 type OrderItemRepository interface {
-	Create(ctx context.Context, tx pgx.Tx, item model.OrderItem) (model.OrderItem, error)
+	Create(ctx context.Context, tx Tx, item model.OrderItem) (model.OrderItem, error)
 	FindByOrderID(ctx context.Context, orderID uuid.UUID) ([]model.OrderItem, error)
 }
 
@@ -283,7 +282,7 @@ func (s *OrderService) FindAll(ctx context.Context, limit int, offset int) ([]dt
 	return response, nil
 }
 
-func (s *OrderService) refundItemsStock(ctx context.Context, tx pgx.Tx, orderID uuid.UUID) error {
+func (s *OrderService) refundItemsStock(ctx context.Context, tx Tx, orderID uuid.UUID) error {
 
 	items, err := s.itemRepo.FindByOrderID(ctx, orderID)
 	if err != nil {

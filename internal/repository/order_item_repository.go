@@ -9,6 +9,7 @@ import (
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/model"
+	"github.com/isadeop/go-order-service-api/internal/txport"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,11 +48,16 @@ func NewOrderItemRepository(pool *pgxpool.Pool) *OrderItemRepository {
 
 func (r *OrderItemRepository) Create(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx txport.Tx,
 	item model.OrderItem,
 ) (model.OrderItem, error) {
 
-	err := tx.QueryRow(
+	pTx, err := pgxTx(tx)
+	if err != nil {
+		return model.OrderItem{}, err
+	}
+
+	err = pTx.QueryRow(
 		ctx,
 		insertOrderItemQuery,
 		item.OrderID,

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/model"
+	"github.com/isadeop/go-order-service-api/internal/txport"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -101,11 +102,16 @@ func NewOrderRepository(pool *pgxpool.Pool) *OrderRepository {
 
 func (repo *OrderRepository) Create(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx txport.Tx,
 	order model.Order,
 ) (model.Order, error) {
 
-	err := tx.QueryRow(
+	pTx, err := pgxTx(tx)
+	if err != nil {
+		return model.Order{}, err
+	}
+
+	err = pTx.QueryRow(
 		ctx,
 		insertOrderQuery,
 		order.ClientID,
@@ -158,13 +164,18 @@ func (repo *OrderRepository) FindByID(
 
 func (repo *OrderRepository) FindByIDForUpdate(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx txport.Tx,
 	id uuid.UUID,
 ) (model.Order, error) {
 
 	var order model.Order
 
-	err := tx.QueryRow(
+	pTx, err := pgxTx(tx)
+	if err != nil {
+		return model.Order{}, err
+	}
+
+	err = pTx.QueryRow(
 		ctx,
 		findOrderByIDForUpdateQuery,
 		id,
@@ -231,12 +242,17 @@ func (repo *OrderRepository) FindAll(
 
 func (repo *OrderRepository) UpdateTotal(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx txport.Tx,
 	orderID uuid.UUID,
 	total float64,
 ) error {
 
-	_, err := tx.Exec(
+	pTx, err := pgxTx(tx)
+	if err != nil {
+		return err
+	}
+
+	_, err = pTx.Exec(
 		ctx,
 		updateOrderTotalQuery,
 		orderID,
@@ -252,14 +268,19 @@ func (repo *OrderRepository) UpdateTotal(
 
 func (repo *OrderRepository) UpdateStatus(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx txport.Tx,
 	id uuid.UUID,
 	status model.OrderStatus,
 ) (model.Order, error) {
 
 	var order model.Order
 
-	err := tx.QueryRow(
+	pTx, err := pgxTx(tx)
+	if err != nil {
+		return model.Order{}, err
+	}
+
+	err = pTx.QueryRow(
 		ctx,
 		updateOrderStatusQuery,
 		id,

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/dto"
@@ -28,7 +27,7 @@ func newFakeOrderRepository() *fakeOrderRepository {
 	return &fakeOrderRepository{byID: make(map[uuid.UUID]model.Order)}
 }
 
-func (f *fakeOrderRepository) Create(ctx context.Context, tx pgx.Tx, order model.Order) (model.Order, error) {
+func (f *fakeOrderRepository) Create(ctx context.Context, tx Tx, order model.Order) (model.Order, error) {
 	order.ID = uuid.New()
 	f.byID[order.ID] = order
 	f.order = append(f.order, order.ID)
@@ -43,7 +42,7 @@ func (f *fakeOrderRepository) FindByID(ctx context.Context, id uuid.UUID) (model
 	return order, nil
 }
 
-func (f *fakeOrderRepository) FindByIDForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (model.Order, error) {
+func (f *fakeOrderRepository) FindByIDForUpdate(ctx context.Context, tx Tx, id uuid.UUID) (model.Order, error) {
 	return f.FindByID(ctx, id)
 }
 
@@ -69,7 +68,7 @@ func (f *fakeOrderRepository) FindAll(ctx context.Context, limit, offset int) ([
 	return orders[offset:end], nil
 }
 
-func (f *fakeOrderRepository) UpdateTotal(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, total float64) error {
+func (f *fakeOrderRepository) UpdateTotal(ctx context.Context, tx Tx, orderID uuid.UUID, total float64) error {
 	order, ok := f.byID[orderID]
 	if !ok {
 		return custom_errors.ErrOrderNotFound
@@ -79,7 +78,7 @@ func (f *fakeOrderRepository) UpdateTotal(ctx context.Context, tx pgx.Tx, orderI
 	return nil
 }
 
-func (f *fakeOrderRepository) UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status model.OrderStatus) (model.Order, error) {
+func (f *fakeOrderRepository) UpdateStatus(ctx context.Context, tx Tx, id uuid.UUID, status model.OrderStatus) (model.Order, error) {
 	if f.updateStatusErr != nil {
 		return model.Order{}, f.updateStatusErr
 	}
@@ -100,7 +99,7 @@ func newFakeOrderItemRepository() *fakeOrderItemRepository {
 	return &fakeOrderItemRepository{byOrderID: make(map[uuid.UUID][]model.OrderItem)}
 }
 
-func (f *fakeOrderItemRepository) Create(ctx context.Context, tx pgx.Tx, item model.OrderItem) (model.OrderItem, error) {
+func (f *fakeOrderItemRepository) Create(ctx context.Context, tx Tx, item model.OrderItem) (model.OrderItem, error) {
 	item.ID = uuid.New()
 	f.byOrderID[item.OrderID] = append(f.byOrderID[item.OrderID], item)
 	return item, nil

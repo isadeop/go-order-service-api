@@ -9,6 +9,7 @@ import (
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/model"
+	"github.com/isadeop/go-order-service-api/internal/txport"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -157,11 +158,16 @@ func (repo *ProductRepository) FindByID(ctx context.Context, id uuid.UUID) (mode
 	return product, nil
 }
 
-func (repo *ProductRepository) FindByIDForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (model.Product, error) {
+func (repo *ProductRepository) FindByIDForUpdate(ctx context.Context, tx txport.Tx, id uuid.UUID) (model.Product, error) {
 
 	var product model.Product
 
-	err := tx.QueryRow(ctx, findProductByIDForUpdateQuery, id).Scan(
+	pTx, err := pgxTx(tx)
+	if err != nil {
+		return model.Product{}, err
+	}
+
+	err = pTx.QueryRow(ctx, findProductByIDForUpdateQuery, id).Scan(
 		&product.ID,
 		&product.Name,
 		&product.Price,
@@ -201,9 +207,14 @@ func (repo *ProductRepository) FindByName(ctx context.Context, name string) (mod
 	return product, nil
 }
 
-func (repo *ProductRepository) Update(ctx context.Context, tx pgx.Tx, id uuid.UUID, product model.Product) (model.Product, error) {
+func (repo *ProductRepository) Update(ctx context.Context, tx txport.Tx, id uuid.UUID, product model.Product) (model.Product, error) {
 
-	err := tx.QueryRow(
+	pTx, err := pgxTx(tx)
+	if err != nil {
+		return model.Product{}, err
+	}
+
+	err = pTx.QueryRow(
 		ctx,
 		updateProductQuery,
 		id,
@@ -230,12 +241,17 @@ func (repo *ProductRepository) Update(ctx context.Context, tx pgx.Tx, id uuid.UU
 
 func (repo *ProductRepository) UpdateStock(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx txport.Tx,
 	productID uuid.UUID,
 	delta int,
 ) error {
 
-	commandTag, err := tx.Exec(
+	pTx, err := pgxTx(tx)
+	if err != nil {
+		return err
+	}
+
+	commandTag, err := pTx.Exec(
 		ctx,
 		updateProductStockQuery,
 		productID,

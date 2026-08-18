@@ -74,7 +74,7 @@ func newIntegrationOrderService(t *testing.T, stock int) (service *OrderService,
 		_ = clientRepo.Delete(ctx, client.ID)
 	})
 
-	service = NewOrderService(pool, orderRepo, itemRepo, productRepo, clientRepo)
+	service = NewOrderService(repository.NewConnPool(pool), orderRepo, itemRepo, productRepo, clientRepo)
 	return service, pool, client.ID, product.ID
 }
 

@@ -42,6 +42,8 @@ func main() {
 
 	defer pool.Close()
 
+	connPool := repository.NewConnPool(pool)
+
 	clientRepository :=
 		repository.NewClientRepository(pool)
 
@@ -55,7 +57,7 @@ func main() {
 		repository.NewProductRepository(pool)
 
 	productService :=
-		services.NewProductService(pool, productRepository)
+		services.NewProductService(connPool, productRepository)
 
 	productController :=
 		controllers.NewProductController(productService)
@@ -71,7 +73,7 @@ func main() {
 
 	orderService :=
 		services.NewOrderService(
-			pool,
+			connPool,
 			orderRepository,
 			orderItemRepository,
 			productStockRepository,

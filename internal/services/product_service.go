@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/dto"
@@ -16,10 +15,10 @@ type ProductRepository interface {
 	Create(ctx context.Context, client model.Product) (model.Product, error)
 	FindAll(ctx context.Context) ([]model.Product, error)
 	FindByID(ctx context.Context, id uuid.UUID) (model.Product, error)
-	FindByIDForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (model.Product, error)
+	FindByIDForUpdate(ctx context.Context, tx Tx, id uuid.UUID) (model.Product, error)
 	FindByName(ctx context.Context, name string) (model.Product, error)
-	Update(ctx context.Context, tx pgx.Tx, id uuid.UUID, product model.Product) (model.Product, error)
-	UpdateStock(ctx context.Context, tx pgx.Tx, productID uuid.UUID, delta int) error
+	Update(ctx context.Context, tx Tx, id uuid.UUID, product model.Product) (model.Product, error)
+	UpdateStock(ctx context.Context, tx Tx, productID uuid.UUID, delta int) error
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 

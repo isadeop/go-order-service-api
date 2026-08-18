@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/dto"
@@ -49,7 +48,7 @@ func (f *fakeProductRepository) FindByID(ctx context.Context, id uuid.UUID) (mod
 	return model.Product{}, custom_errors.ErrProductNotFound
 }
 
-func (f *fakeProductRepository) FindByIDForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (model.Product, error) {
+func (f *fakeProductRepository) FindByIDForUpdate(ctx context.Context, tx Tx, id uuid.UUID) (model.Product, error) {
 	return f.FindByID(ctx, id)
 }
 
@@ -64,7 +63,7 @@ func (f *fakeProductRepository) FindByName(ctx context.Context, name string) (mo
 	return product, nil
 }
 
-func (f *fakeProductRepository) Update(ctx context.Context, tx pgx.Tx, id uuid.UUID, product model.Product) (model.Product, error) {
+func (f *fakeProductRepository) Update(ctx context.Context, tx Tx, id uuid.UUID, product model.Product) (model.Product, error) {
 	if f.updateErr != nil {
 		return model.Product{}, f.updateErr
 	}
@@ -83,7 +82,7 @@ func (f *fakeProductRepository) Update(ctx context.Context, tx pgx.Tx, id uuid.U
 	return product, nil
 }
 
-func (f *fakeProductRepository) UpdateStock(ctx context.Context, tx pgx.Tx, productID uuid.UUID, delta int) error {
+func (f *fakeProductRepository) UpdateStock(ctx context.Context, tx Tx, productID uuid.UUID, delta int) error {
 	if f.updateStockErr != nil {
 		return f.updateStockErr
 	}

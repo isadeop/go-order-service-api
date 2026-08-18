@@ -126,16 +126,14 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 			if err != nil {
 				return dto.OrderResponse{}, err
 			}
-
-			products[itemRequest.ProductID] = product
 		}
 
+		if err := product.Reserve(*itemRequest.Quantity); err != nil {
+			return dto.OrderResponse{}, err
+		}
+
+		products[itemRequest.ProductID] = product
 		quantities[itemRequest.ProductID] += *itemRequest.Quantity
-
-		if quantities[itemRequest.ProductID] > product.Stock {
-			return dto.OrderResponse{},
-				custom_errors.ErrInsufficientStock
-		}
 	}
 
 	var total float64
@@ -320,13 +318,8 @@ func (s *OrderService) UpdateStatus(ctx context.Context, id uuid.UUID, status mo
 		return dto.OrderResponse{}, err
 	}
 
-	switch order.Status {
-	case model.OrderStatusPaid:
-		return dto.OrderResponse{},
-			custom_errors.ErrOrderAlreadyPaid
-	case model.OrderStatusCanceled:
-		return dto.OrderResponse{},
-			custom_errors.ErrOrderAlreadyCanceled
+	if err := order.ChangeStatus(status); err != nil {
+		return dto.OrderResponse{}, err
 	}
 
 	if status == model.OrderStatusCanceled {
@@ -361,13 +354,8 @@ func (s *OrderService) Pay(ctx context.Context, id uuid.UUID) (dto.OrderResponse
 		return dto.OrderResponse{}, err
 	}
 
-	switch order.Status {
-	case model.OrderStatusPaid:
-		return dto.OrderResponse{},
-			custom_errors.ErrOrderAlreadyPaid
-	case model.OrderStatusCanceled:
-		return dto.OrderResponse{},
-			custom_errors.ErrOrderCannotChangeStatus
+	if err := order.Pay(); err != nil {
+		return dto.OrderResponse{}, err
 	}
 
 	order, err = s.orderRepo.UpdateStatus(ctx, tx, id, model.OrderStatusPaid)
@@ -394,13 +382,8 @@ func (s *OrderService) Cancel(ctx context.Context, id uuid.UUID) (dto.OrderRespo
 		return dto.OrderResponse{}, err
 	}
 
-	switch order.Status {
-	case model.OrderStatusCanceled:
-		return dto.OrderResponse{},
-			custom_errors.ErrOrderAlreadyCanceled
-	case model.OrderStatusPaid:
-		return dto.OrderResponse{},
-			custom_errors.ErrOrderCannotChangeStatus
+	if err := order.Cancel(); err != nil {
+		return dto.OrderResponse{}, err
 	}
 
 	if err := s.refundItemsStock(ctx, tx, order.ID); err != nil {

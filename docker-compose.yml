@@ -1,0 +1,74 @@
+#   docker compose up --build        -> sobe tudo (aplica migrations e inicia a API)
+#   docker compose up -d postgres    -> sobe só o banco (para rodar "go run"/"go test" direto no host)
+#   docker compose down -v           -> derruba tudo e apaga o volume de dados
+#
+# Credenciais abaixo são as mesmas de exemplo já usadas em .env/README —
+# Projeto apenas de estudo, sem dados reais.
+
+x-postgres-env: &postgres-env
+  POSTGRES_USER: adm
+  POSTGRES_PASSWORD: adm
+  POSTGRES_DB: orderserviceapi
+
+services:
+  postgres:
+    # A partir da versão 18 por conta do uuidv7() como default de UUID.
+    image: postgres:18-alpine
+    container_name: order-service-postgres
+    environment:
+      <<: *postgres-env
+    ports:
+      - "5432:5432"
+    volumes:
+      - order_service_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - order-service-net
+
+  migrate:
+    image: migrate/migrate:v4.17.1
+    container_name: order-service-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./internal/migrations:/migrations:ro
+    command:
+      - -path=/migrations
+      - -database=postgres://adm:adm@postgres:5432/orderserviceapi?sslmode=disable
+      - up
+    restart: "no"
+    networks:
+      - order-service-net
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: order-service-api
+    environment:
+      <<: *postgres-env
+      PORT: "8080"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_SSLMODE: disable
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - order-service-net
+
+volumes:
+  order_service_postgres_data:
+
+networks:
+  order-service-net:
+    driver: bridge

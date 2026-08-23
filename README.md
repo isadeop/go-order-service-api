@@ -51,7 +51,7 @@ Módulo 2: avaliação de implementação de testes e correções ou melhorias p
 # Pré-requisitos
 
 - Go 1.24+
-- PostgreSQL
+- PostgreSQL 18 ou superior (migrations usam `uuidv7()` como default de UUID)
 - golang-migrate
 
 Instalação do migrate:
@@ -118,6 +118,33 @@ http://localhost:8080
 
 ---
 
+# Executando com Docker
+
+Pré-requisito: Docker e Docker Compose.
+
+Sobe Postgres, aplica as migrations e inicia a API, tudo em um comando:
+
+```bash
+docker compose up --build
+```
+
+A API fica disponível em `http://localhost:8080`, com o Postgres também exposto em `localhost:5432` (mesmas credenciais de exemplo das migrations).
+
+Para derrubar tudo (e apagar os dados do banco):
+
+```bash
+docker compose down -v
+```
+
+Também é possível subir só o banco (útil para rodar a API ou os testes direto no host, com `go run`/`go test`):
+
+```bash
+docker compose up -d postgres migrate
+go run cmd/main.go
+```
+
+---
+
 # Rotas
 
 ## Clientes
@@ -170,9 +197,10 @@ A API pode ser testada utilizando ferramentas como:
 
 O projeto possui:
 
-- Testes unitários dos services, cobrindo as regras de negócio (criação, pagamento, cancelamento, validações), sem depender de banco.
-- Testes de integração dos repositories, contra um PostgreSQL real.
-- Testes dos controllers, cobrindo a tradução de cada erro de negócio em status HTTP.
+- Testes unitários de domínio (`domain`), cobrindo as invariantes de estado do pedido e do estoque (`Order.Pay/Cancel`, `Product.Reserve/Release`), sem depender de banco nem de HTTP.
+- Testes unitários de aplicação (`application`), cobrindo os casos de uso (criação, pagamento, cancelamento, validações) com fakes de repository, sem depender de banco.
+- Testes de integração de `infra/repository`, contra um PostgreSQL real.
+- Testes dos controllers (`entrypoint/http/controllers`), cobrindo a tradução de cada erro de negócio em status HTTP.
 - Testes de concorrência, validando que operações críticas de pedido (criação e cancelamento) mantêm o estoque e o status consistentes sob concorrência (sem lost update, sem estorno duplicado).
 
 Comandos
@@ -192,31 +220,37 @@ Cobertura atual por camada:
 
 | Pacote | Cobertura |
 |---|---|
-| `services` | ~87% |
-| `controllers` | ~82% |
-| `repository` | ~82% |
+| `application` | ~87% |
+| `domain` | 100% |
+| `entrypoint/http/controllers` | ~82% |
+| `infra/repository` | ~81% |
 | `security` | ~80% |
 
-`model`, `dto`, `routes`, `config`, `database` e `cmd` não têm testes próprios pois não apresentam regra de negócio.
+`dto`, `entrypoint/http/routes`, `infra/config`, `infra/database`, `observability`, `txport` e `cmd` não têm testes próprios pois não apresentam regra de negócio.
 
-Os testes de `repository` e os de concorrência precisam de um PostgreSQL acessível (o mesmo configurado em `.env`/variáveis de ambiente). Se o banco não estiver disponível, esses testes são pulados automaticamente, sem quebrar `go test ./...`.
+Os testes de `infra/repository` e os de concorrência precisam de um PostgreSQL acessível, ou o `docker compose up -d postgres` descrito acima. Se o banco não estiver disponível, esses testes são pulados automaticamente, sem quebrar `go test ./...`.
 
 ---
 
 # Estrutura do projeto
 
 ```
-cmd/
+cmd/                          
 internal/
-    config/
-    controllers/
-    custom_errors/
-    database/
-    dto/
-    model/
-    repository/
-    routes/
-    services/
+    domain/                   
+    application/               # casos de uso, orquestra domínio + portas (OrderService, ProductService...)
+    entrypoint/
+        http/
+            controllers/       # handlers HTTP
+            routes/            # registro das rotas
+    infra/
+        repository/            # implementação concreta dos repositories (pgx/SQL)
+        database/              # criação do pool de conexões (pgxpool)
+        config/                # leitura de variáveis
+    custom_errors/             # erros de domínio 
+    dto/                       
+    txport/                    # contrato mínimo de transação
+    observability/             # logger slog (JSON)
     migrations/
     security/
 ```
@@ -246,12 +280,10 @@ Este projeto foi desenvolvido com fins de estudo e demonstração. Algumas melho
 - Autenticação (JWT)
 - Autorização por perfis (RBAC)
 - Documentação da API (OpenAPI/Swagger)
-- Logging estruturado
 - Cache para consultas frequentes
 - Paginação padronizada
 - Filtros de busca
 - CI/CD
-- Docker e Docker Compose
 - Outros
 ---
 

@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/isadeop/go-order-service-api/internal/model"
+	"github.com/isadeop/go-order-service-api/internal/domain"
 )
 
 type CreateClientRequest struct {
@@ -30,7 +30,7 @@ type UpdateClientRequest struct {
 	Phone string `json:"phone"`
 }
 
-func NewClientResponse(client model.Client) ClientResponse {
+func NewClientResponse(client domain.Client) ClientResponse {
 	return ClientResponse{
 		ID:        client.ID,
 		Name:      client.Name,

@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/isadeop/go-order-service-api/internal/config"
-	"github.com/isadeop/go-order-service-api/internal/controllers"
-	"github.com/isadeop/go-order-service-api/internal/database"
+	"github.com/isadeop/go-order-service-api/internal/application"
+	"github.com/isadeop/go-order-service-api/internal/entrypoint/http/controllers"
+	"github.com/isadeop/go-order-service-api/internal/entrypoint/http/routes"
+	"github.com/isadeop/go-order-service-api/internal/infra/config"
+	"github.com/isadeop/go-order-service-api/internal/infra/database"
+	"github.com/isadeop/go-order-service-api/internal/infra/repository"
 	"github.com/isadeop/go-order-service-api/internal/observability"
-	"github.com/isadeop/go-order-service-api/internal/repository"
-	"github.com/isadeop/go-order-service-api/internal/routes"
-	"github.com/isadeop/go-order-service-api/internal/services"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -48,7 +48,7 @@ func main() {
 		repository.NewClientRepository(pool)
 
 	clientService :=
-		services.NewClientService(clientRepository)
+		application.NewClientService(clientRepository)
 
 	clientController :=
 		controllers.NewClientController(clientService)
@@ -57,7 +57,7 @@ func main() {
 		repository.NewProductRepository(pool)
 
 	productService :=
-		services.NewProductService(connPool, productRepository)
+		application.NewProductService(connPool, productRepository)
 
 	productController :=
 		controllers.NewProductController(productService)
@@ -72,7 +72,7 @@ func main() {
 		repository.NewProductRepository(pool)
 
 	orderService :=
-		services.NewOrderService(
+		application.NewOrderService(
 			connPool,
 			orderRepository,
 			orderItemRepository,

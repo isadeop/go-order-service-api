@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/isadeop/go-order-service-api/internal/model"
+	"github.com/isadeop/go-order-service-api/internal/domain"
 )
 
 type CreateOrderRequest struct {
@@ -16,13 +16,13 @@ type OrderResponse struct {
 	ID         uuid.UUID           `json:"id"`
 	ClientID   uuid.UUID           `json:"client_id"`
 	ClientName string              `json:"client_name"`
-	Status     model.OrderStatus   `json:"status"`
+	Status     domain.OrderStatus  `json:"status"`
 	Total      float64             `json:"total"`
 	Items      []OrderItemResponse `json:"items,omitempty"`
 	CreatedAt  time.Time           `json:"created_at"`
 }
 
-func NewOrderResponse(order model.Order, clientName string) OrderResponse {
+func NewOrderResponse(order domain.Order, clientName string) OrderResponse {
 	return OrderResponse{
 		ID:         order.ID,
 		ClientID:   order.ClientID,

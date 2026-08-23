@@ -2,7 +2,7 @@ package dto
 
 import (
 	"github.com/google/uuid"
-	"github.com/isadeop/go-order-service-api/internal/model"
+	"github.com/isadeop/go-order-service-api/internal/domain"
 )
 
 type CreateProductRequest struct {
@@ -24,7 +24,7 @@ type ProductResponse struct {
 	Stock int       `json:"stock"`
 }
 
-func NewProductResponse(product model.Product) ProductResponse {
+func NewProductResponse(product domain.Product) ProductResponse {
 	return ProductResponse{
 		ID:    product.ID,
 		Name:  product.Name,

@@ -180,6 +180,74 @@ func (s *ProductService) Update(
 	return dto.NewProductResponse(product), nil
 }
 
+func (s *ProductService) Reserve(
+	ctx context.Context,
+	id uuid.UUID,
+	quantity int,
+) (dto.ProductResponse, error) {
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return dto.ProductResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	product, err := s.repository.FindByIDForUpdate(ctx, tx, id)
+	if err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	if err := product.Reserve(quantity); err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	product, err = s.repository.Update(ctx, tx, id, product)
+	if err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	return dto.NewProductResponse(product), nil
+}
+
+func (s *ProductService) Release(
+	ctx context.Context,
+	id uuid.UUID,
+	quantity int,
+) (dto.ProductResponse, error) {
+
+	if quantity <= 0 {
+		return dto.ProductResponse{}, custom_errors.ErrOrderItemQuantityInvalid
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return dto.ProductResponse{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	product, err := s.repository.FindByIDForUpdate(ctx, tx, id)
+	if err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	product.Release(quantity)
+
+	product, err = s.repository.Update(ctx, tx, id, product)
+	if err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	return dto.NewProductResponse(product), nil
+}
+
 func (s *ProductService) Delete(
 	ctx context.Context,
 	id uuid.UUID,

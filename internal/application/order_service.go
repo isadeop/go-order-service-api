@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
@@ -30,26 +31,55 @@ type OrderItemRepository interface {
 	FindByOrderID(ctx context.Context, orderID uuid.UUID) ([]domain.OrderItem, error)
 }
 
+// ProductStockGateway é a porta que o order-service usa para consultar e
+// reservar/liberar estoque de produtos.
+type ProductStockGateway interface {
+	FindByID(ctx context.Context, id uuid.UUID) (domain.Product, error)
+	Reserve(ctx context.Context, productID uuid.UUID, quantity int) error
+	Release(ctx context.Context, productID uuid.UUID, quantity int) error
+}
+
+// reservedItem registra uma reserva de estoque já confirmada pelo
+// stock-service durante Create.
+type reservedItem struct {
+	productID uuid.UUID
+	quantity  int
+}
+
 type OrderService struct {
-	pool        ConnPool
-	orderRepo   OrderRepository
-	itemRepo    OrderItemRepository
-	productRepo ProductRepository
-	clientRepo  ClientRepository
+	pool         ConnPool
+	orderRepo    OrderRepository
+	itemRepo     OrderItemRepository
+	productStock ProductStockGateway
+	clientRepo   ClientRepository
 }
 
 func NewOrderService(pool ConnPool,
 	orderRepo OrderRepository,
 	itemRepo OrderItemRepository,
-	productRepo ProductRepository,
+	productStock ProductStockGateway,
 	clientRepo ClientRepository) *OrderService {
 
 	return &OrderService{
-		pool:        pool,
-		orderRepo:   orderRepo,
-		itemRepo:    itemRepo,
-		productRepo: productRepo,
-		clientRepo:  clientRepo,
+		pool:         pool,
+		orderRepo:    orderRepo,
+		itemRepo:     itemRepo,
+		productStock: productStock,
+		clientRepo:   clientRepo,
+	}
+}
+
+func (s *OrderService) compensateReservations(ctx context.Context, reserved []reservedItem) {
+	for _, item := range reserved {
+		if err := s.productStock.Release(ctx, item.productID, item.quantity); err != nil {
+			slog.Error("order.create.compensation_failed",
+				"operation", "Create",
+				"result", "error",
+				"product_id", item.productID.String(),
+				"quantity", item.quantity,
+				"err", err.Error(),
+			)
+		}
 	}
 }
 
@@ -73,28 +103,8 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 		return dto.OrderResponse{}, err
 	}
 
-	tx, err := s.pool.Begin(ctx)
-
-	if err != nil {
-		return dto.OrderResponse{}, err
-	}
-
-	defer tx.Rollback(ctx)
-
-	order := domain.Order{
-		ClientID: request.ClientID,
-		Status:   domain.OrderStatusPending,
-		Total:    0,
-	}
-
-	order, err = s.orderRepo.Create(ctx, tx, order)
-
-	if err != nil {
-		return dto.OrderResponse{}, err
-	}
-
-	products := make(map[uuid.UUID]domain.Product)
 	quantities := make(map[uuid.UUID]int)
+	productOrder := make([]uuid.UUID, 0, len(request.Items))
 
 	for _, itemRequest := range request.Items {
 		if itemRequest.ProductID == uuid.Nil {
@@ -112,27 +122,66 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 				custom_errors.ErrOrderItemQuantityInvalid
 		}
 
-		product, alreadyLocked := products[itemRequest.ProductID]
-
-		if !alreadyLocked {
-			product, err = s.productRepo.FindByIDForUpdate(ctx, tx, itemRequest.ProductID)
-
-			if errors.Is(err, custom_errors.ErrProductNotFound) {
-				return dto.OrderResponse{},
-					custom_errors.ErrOrderProductNotFound
-			}
-
-			if err != nil {
-				return dto.OrderResponse{}, err
-			}
+		if _, alreadySeen := quantities[itemRequest.ProductID]; !alreadySeen {
+			productOrder = append(productOrder, itemRequest.ProductID)
 		}
 
-		if err := product.Reserve(*itemRequest.Quantity); err != nil {
+		quantities[itemRequest.ProductID] += *itemRequest.Quantity
+	}
+
+	// Busca os dados de cada produto (preço, nome) no stock-service.
+	products := make(map[uuid.UUID]domain.Product, len(productOrder))
+
+	for _, productID := range productOrder {
+
+		product, err := s.productStock.FindByID(ctx, productID)
+
+		if errors.Is(err, custom_errors.ErrProductNotFound) {
+			return dto.OrderResponse{},
+				custom_errors.ErrOrderProductNotFound
+		}
+
+		if err != nil {
 			return dto.OrderResponse{}, err
 		}
 
-		products[itemRequest.ProductID] = product
-		quantities[itemRequest.ProductID] += *itemRequest.Quantity
+		products[productID] = product
+	}
+
+	reserved := make([]reservedItem, 0, len(productOrder))
+
+	for _, productID := range productOrder {
+
+		quantity := quantities[productID]
+
+		if err := s.productStock.Reserve(ctx, productID, quantity); err != nil {
+			s.compensateReservations(ctx, reserved)
+			return dto.OrderResponse{}, err
+		}
+
+		reserved = append(reserved, reservedItem{productID: productID, quantity: quantity})
+	}
+
+	tx, err := s.pool.Begin(ctx)
+
+	if err != nil {
+		s.compensateReservations(ctx, reserved)
+		return dto.OrderResponse{}, err
+	}
+
+	defer tx.Rollback(ctx)
+
+	order := domain.Order{
+		ClientID: request.ClientID,
+		Status:   domain.OrderStatusPending,
+		Total:    0,
+	}
+
+	order, err = s.orderRepo.Create(ctx, tx, order)
+
+	if err != nil {
+		s.compensateReservations(ctx, reserved)
+		return dto.OrderResponse{}, err
 	}
 
 	var total float64
@@ -155,6 +204,7 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 		item, err = s.itemRepo.Create(ctx, tx, item)
 
 		if err != nil {
+			s.compensateReservations(ctx, reserved)
 			return dto.OrderResponse{}, err
 		}
 
@@ -162,24 +212,17 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 		itemsResponse = append(itemsResponse, dto.NewOrderItemResponse(item, product.Name))
 	}
 
-	for productID, quantity := range quantities {
-
-		err = s.productRepo.UpdateStock(ctx, tx, productID, -quantity)
-
-		if err != nil {
-			return dto.OrderResponse{}, err
-		}
-	}
-
 	err = s.orderRepo.UpdateTotal(ctx, tx, order.ID, total)
 
 	if err != nil {
+		s.compensateReservations(ctx, reserved)
 		return dto.OrderResponse{}, err
 	}
 
 	order.Total = total
 
 	if err = tx.Commit(ctx); err != nil {
+		s.compensateReservations(ctx, reserved)
 		return dto.OrderResponse{},
 			fmt.Errorf("commit order: %w", err)
 	}
@@ -218,7 +261,7 @@ func (s *OrderService) FindByID(ctx context.Context, id uuid.UUID) (dto.OrderRes
 
 	for _, item := range items {
 
-		product, err := s.productRepo.FindByID(ctx, item.ProductID)
+		product, err := s.productStock.FindByID(ctx, item.ProductID)
 		if err != nil {
 			return dto.OrderResponse{}, err
 		}
@@ -264,7 +307,7 @@ func (s *OrderService) FindAll(ctx context.Context, limit int, offset int) ([]dt
 		)
 
 		for _, item := range items {
-			product, err := s.productRepo.FindByID(ctx, item.ProductID)
+			product, err := s.productStock.FindByID(ctx, item.ProductID)
 			if err != nil {
 				return nil, err
 			}
@@ -282,7 +325,14 @@ func (s *OrderService) FindAll(ctx context.Context, limit int, offset int) ([]dt
 	return response, nil
 }
 
-func (s *OrderService) refundItemsStock(ctx context.Context, tx Tx, orderID uuid.UUID) error {
+// refundItemsStock devolve ao stock-service, via HTTP, o estoque de todos
+// os itens do pedido. Chamada antes do commit da transação local que muda
+// o status do pedido para CANCELED: se a liberação falhar, o cancelamento
+// inteiro é abortado e o pedido continua no status anterior — falha segura
+// (nenhum estado fica inconsistente). O gap conhecido é o caminho inverso
+// (liberação funciona, mas o commit local falha logo em seguida) — tratado
+// de fato só com idempotência na Saga (Etapa 10).
+func (s *OrderService) refundItemsStock(ctx context.Context, orderID uuid.UUID) error {
 
 	items, err := s.itemRepo.FindByOrderID(ctx, orderID)
 	if err != nil {
@@ -290,7 +340,7 @@ func (s *OrderService) refundItemsStock(ctx context.Context, tx Tx, orderID uuid
 	}
 
 	for _, item := range items {
-		if err := s.productRepo.UpdateStock(ctx, tx, item.ProductID, item.Quantity); err != nil {
+		if err := s.productStock.Release(ctx, item.ProductID, item.Quantity); err != nil {
 			return err
 		}
 	}
@@ -322,7 +372,7 @@ func (s *OrderService) UpdateStatus(ctx context.Context, id uuid.UUID, status do
 	}
 
 	if status == domain.OrderStatusCanceled {
-		if err := s.refundItemsStock(ctx, tx, order.ID); err != nil {
+		if err := s.refundItemsStock(ctx, order.ID); err != nil {
 			return dto.OrderResponse{}, err
 		}
 	}
@@ -385,7 +435,7 @@ func (s *OrderService) Cancel(ctx context.Context, id uuid.UUID) (dto.OrderRespo
 		return dto.OrderResponse{}, err
 	}
 
-	if err := s.refundItemsStock(ctx, tx, order.ID); err != nil {
+	if err := s.refundItemsStock(ctx, order.ID); err != nil {
 		return dto.OrderResponse{}, err
 	}
 

@@ -18,6 +18,8 @@ type ProductService interface {
 	FindAll(ctx context.Context) ([]dto.ProductResponse, error)
 	FindByID(ctx context.Context, id uuid.UUID) (dto.ProductResponse, error)
 	Update(ctx context.Context, id uuid.UUID, request dto.UpdateProductRequest) (dto.ProductResponse, error)
+	Reserve(ctx context.Context, id uuid.UUID, quantity int) (dto.ProductResponse, error)
+	Release(ctx context.Context, id uuid.UUID, quantity int) (dto.ProductResponse, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
@@ -47,9 +49,13 @@ func writeProductError(w http.ResponseWriter, operation string, err error) {
 		errors.Is(err, custom_errors.ErrProductPriceRequired),
 		errors.Is(err, custom_errors.ErrProductStockRequired),
 		errors.Is(err, custom_errors.ErrProductPriceInvalid),
-		errors.Is(err, custom_errors.ErrProductStockInvalid):
+		errors.Is(err, custom_errors.ErrProductStockInvalid),
+		errors.Is(err, custom_errors.ErrOrderItemQuantityInvalid):
 
 		http.Error(w, err.Error(), http.StatusBadRequest)
+
+	case errors.Is(err, custom_errors.ErrInsufficientStock):
+		http.Error(w, err.Error(), http.StatusConflict)
 
 	default:
 		slog.Error("product.internal_error",
@@ -166,6 +172,74 @@ func (c *ProductController) UpdateProduct(
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// reserveOrReleaseRequest é o payload de /produtos/{id}/reservar e
+// /produtos/{id}/liberar — a única informação necessária é a quantidade.
+type reserveOrReleaseRequest struct {
+	Quantity int `json:"quantity"`
+}
+
+func (c *ProductController) Reserve(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	id, err := parseIDParam(r)
+	if err != nil {
+		writeProductError(w, "Reserve", custom_errors.ErrInvalidProductID)
+		return
+	}
+
+	var request reserveOrReleaseRequest
+
+	if !decodeJSONBody(w, r, &request) {
+		return
+	}
+
+	response, err := c.service.Reserve(
+		r.Context(),
+		id,
+		request.Quantity,
+	)
+
+	if err != nil {
+		writeProductError(w, "Reserve", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (c *ProductController) Release(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	id, err := parseIDParam(r)
+	if err != nil {
+		writeProductError(w, "Release", custom_errors.ErrInvalidProductID)
+		return
+	}
+
+	var request reserveOrReleaseRequest
+
+	if !decodeJSONBody(w, r, &request) {
+		return
+	}
+
+	response, err := c.service.Release(
+		r.Context(),
+		id,
+		request.Quantity,
+	)
+
+	if err != nil {
+		writeProductError(w, "Release", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 

@@ -321,6 +321,104 @@ func TestProductService_Update_ProdutoInexistente(t *testing.T) {
 	}
 }
 
+func TestProductService_Reserve_HappyPath(t *testing.T) {
+	f := newProductServiceFixture()
+
+	created, err := f.repo.Create(context.Background(), domain.Product{Name: "Notebook", Price: 5000, Stock: 10})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	response, err := f.service.Reserve(context.Background(), created.ID, 3)
+	if err != nil {
+		t.Fatalf("Reserve retornou erro inesperado: %v", err)
+	}
+	if response.Stock != 7 {
+		t.Errorf("estoque = %d, esperado 7", response.Stock)
+	}
+	if !f.pool.tx.committed {
+		t.Error("esperava que a transação fosse commitada no fluxo de sucesso")
+	}
+}
+
+func TestProductService_Reserve_EstoqueInsuficiente(t *testing.T) {
+	f := newProductServiceFixture()
+
+	created, err := f.repo.Create(context.Background(), domain.Product{Name: "Notebook", Price: 5000, Stock: 2})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, err = f.service.Reserve(context.Background(), created.ID, 3)
+
+	if !errors.Is(err, custom_errors.ErrInsufficientStock) {
+		t.Errorf("erro = %v, esperado %v", err, custom_errors.ErrInsufficientStock)
+	}
+	if f.pool.tx.committed {
+		t.Error("transação não deveria ter sido commitada quando o estoque é insuficiente")
+	}
+}
+
+func TestProductService_Reserve_QuantidadeInvalida(t *testing.T) {
+	f := newProductServiceFixture()
+
+	created, err := f.repo.Create(context.Background(), domain.Product{Name: "Notebook", Price: 5000, Stock: 10})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, err = f.service.Reserve(context.Background(), created.ID, 0)
+
+	if !errors.Is(err, custom_errors.ErrOrderItemQuantityInvalid) {
+		t.Errorf("erro = %v, esperado %v", err, custom_errors.ErrOrderItemQuantityInvalid)
+	}
+}
+
+func TestProductService_Reserve_ProdutoInexistente(t *testing.T) {
+	f := newProductServiceFixture()
+
+	_, err := f.service.Reserve(context.Background(), uuid.New(), 1)
+
+	if !errors.Is(err, custom_errors.ErrProductNotFound) {
+		t.Errorf("erro = %v, esperado %v", err, custom_errors.ErrProductNotFound)
+	}
+}
+
+func TestProductService_Release_HappyPath(t *testing.T) {
+	f := newProductServiceFixture()
+
+	created, err := f.repo.Create(context.Background(), domain.Product{Name: "Notebook", Price: 5000, Stock: 2})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	response, err := f.service.Release(context.Background(), created.ID, 3)
+	if err != nil {
+		t.Fatalf("Release retornou erro inesperado: %v", err)
+	}
+	if response.Stock != 5 {
+		t.Errorf("estoque = %d, esperado 5", response.Stock)
+	}
+	if !f.pool.tx.committed {
+		t.Error("esperava que a transação fosse commitada no fluxo de sucesso")
+	}
+}
+
+func TestProductService_Release_QuantidadeInvalida(t *testing.T) {
+	f := newProductServiceFixture()
+
+	created, err := f.repo.Create(context.Background(), domain.Product{Name: "Notebook", Price: 5000, Stock: 10})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, err = f.service.Release(context.Background(), created.ID, -1)
+
+	if !errors.Is(err, custom_errors.ErrOrderItemQuantityInvalid) {
+		t.Errorf("erro = %v, esperado %v", err, custom_errors.ErrOrderItemQuantityInvalid)
+	}
+}
+
 func TestProductService_Update_RollbackQuandoUpdateFalha(t *testing.T) {
 	f := newProductServiceFixture()
 

@@ -6,13 +6,37 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/domain"
 )
 
+// createTestProduct insere um produto com nome único no stock_db e faz
+// sua remoção ao final do teste.
+func createTestProduct(t *testing.T, pool *pgxpool.Pool, stock int) domain.Product {
+	t.Helper()
+
+	repo := NewProductRepository(pool)
+
+	product, err := repo.Create(context.Background(), domain.Product{
+		Name:  "Produto de Teste de Integração " + uuid.NewString(),
+		Price: 10,
+		Stock: stock,
+	})
+	if err != nil {
+		t.Fatalf("setup: falha ao criar produto de teste: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = repo.Delete(context.Background(), product.ID)
+	})
+
+	return product
+}
+
 func TestProductRepository_Create_HappyPath(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 
 	product := createTestProduct(t, pool, 10)
 
@@ -28,7 +52,7 @@ func TestProductRepository_Create_HappyPath(t *testing.T) {
 }
 
 func TestProductRepository_Create_NomeDuplicado(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	existing := createTestProduct(t, pool, 10)
@@ -45,7 +69,7 @@ func TestProductRepository_Create_NomeDuplicado(t *testing.T) {
 }
 
 func TestProductRepository_Create_EstoqueNegativoViolaConstraint(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	_, err := repo.Create(context.Background(), domain.Product{
@@ -60,7 +84,7 @@ func TestProductRepository_Create_EstoqueNegativoViolaConstraint(t *testing.T) {
 }
 
 func TestProductRepository_FindByID_NaoEncontrado(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	_, err := repo.FindByID(context.Background(), uuid.New())
@@ -71,7 +95,7 @@ func TestProductRepository_FindByID_NaoEncontrado(t *testing.T) {
 }
 
 func TestProductRepository_FindByName_HappyPath(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	created := createTestProduct(t, pool, 10)
@@ -86,7 +110,7 @@ func TestProductRepository_FindByName_HappyPath(t *testing.T) {
 }
 
 func TestProductRepository_FindByName_NaoEncontrado(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	_, err := repo.FindByName(context.Background(), "produto-inexistente-"+uuid.NewString())
@@ -97,7 +121,7 @@ func TestProductRepository_FindByName_NaoEncontrado(t *testing.T) {
 }
 
 func TestProductRepository_FindAll_ContemProdutoCriado(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	created := createTestProduct(t, pool, 10)
@@ -120,7 +144,7 @@ func TestProductRepository_FindAll_ContemProdutoCriado(t *testing.T) {
 }
 
 func TestProductRepository_Update_HappyPath(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	created := createTestProduct(t, pool, 10)
@@ -149,7 +173,7 @@ func TestProductRepository_Update_HappyPath(t *testing.T) {
 }
 
 func TestProductRepository_Update_NaoEncontrado(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	tx, err := pool.Begin(context.Background())
@@ -170,7 +194,7 @@ func TestProductRepository_Update_NaoEncontrado(t *testing.T) {
 }
 
 func TestProductRepository_UpdateStock_Decrementa(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	created := createTestProduct(t, pool, 10)
@@ -198,7 +222,7 @@ func TestProductRepository_UpdateStock_Decrementa(t *testing.T) {
 }
 
 func TestProductRepository_UpdateStock_InsuficienteNaoAplicaDelta(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	created := createTestProduct(t, pool, 3)
@@ -217,7 +241,7 @@ func TestProductRepository_UpdateStock_InsuficienteNaoAplicaDelta(t *testing.T) 
 }
 
 func TestProductRepository_FindByIDForUpdate_HappyPath(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	created := createTestProduct(t, pool, 10)
@@ -238,7 +262,7 @@ func TestProductRepository_FindByIDForUpdate_HappyPath(t *testing.T) {
 }
 
 func TestProductRepository_Delete_HappyPath(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	product, err := repo.Create(context.Background(), domain.Product{
@@ -261,7 +285,7 @@ func TestProductRepository_Delete_HappyPath(t *testing.T) {
 }
 
 func TestProductRepository_Delete_NaoEncontrado(t *testing.T) {
-	pool := newTestPool(t)
+	pool := newStockTestPool(t)
 	repo := NewProductRepository(pool)
 
 	err := repo.Delete(context.Background(), uuid.New())

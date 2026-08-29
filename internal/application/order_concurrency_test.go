@@ -3,33 +3,40 @@ package application
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/domain"
 	"github.com/isadeop/go-order-service-api/internal/dto"
+	"github.com/isadeop/go-order-service-api/internal/entrypoint/http/controllers"
+	"github.com/isadeop/go-order-service-api/internal/entrypoint/http/routes"
 	"github.com/isadeop/go-order-service-api/internal/infra/config"
 	"github.com/isadeop/go-order-service-api/internal/infra/repository"
+	"github.com/isadeop/go-order-service-api/internal/infra/stockclient"
 )
 
 func newConcurrencyTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	cfg := config.Load()
+	cfg := config.Load("orders_db")
 
 	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
-		t.Skipf("não foi possível conectar ao postgres de teste: %v", err)
+		t.Skipf("não foi possível conectar ao postgres de teste (orders_db): %v", err)
 	}
 
 	if err := pool.Ping(context.Background()); err != nil {
 		pool.Close()
-		t.Skipf("postgres de teste indisponível: %v", err)
+		t.Skipf("postgres de teste indisponível (orders_db): %v", err)
 	}
 
 	t.Cleanup(pool.Close)
@@ -37,15 +44,70 @@ func newConcurrencyTestPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func newIntegrationOrderService(t *testing.T, stock int) (service *OrderService, pool *pgxpool.Pool, clientID, productID uuid.UUID) {
+func newStockConcurrencyTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	pool = newConcurrencyTestPool(t)
+	database := config.DatabaseConfig{
+		Host:     envOrDefault("STOCK_POSTGRES_HOST", "localhost"),
+		Port:     envOrDefault("STOCK_POSTGRES_PORT", "5433"),
+		User:     envOrDefault("STOCK_POSTGRES_USER", "adm"),
+		Password: envOrDefault("STOCK_POSTGRES_PASSWORD", "adm"),
+		Name:     envOrDefault("STOCK_POSTGRES_DB", "stock_db"),
+		SSLMode:  envOrDefault("STOCK_POSTGRES_SSLMODE", "disable"),
+	}
 
-	clientRepo := repository.NewClientRepository(pool)
-	productRepo := repository.NewProductRepository(pool)
-	orderRepo := repository.NewOrderRepository(pool)
-	itemRepo := repository.NewOrderItemRepository(pool)
+	pool, err := pgxpool.New(context.Background(), database.URL())
+	if err != nil {
+		t.Skipf("não foi possível conectar ao postgres de teste (stock_db): %v", err)
+	}
+
+	if err := pool.Ping(context.Background()); err != nil {
+		pool.Close()
+		t.Skipf("postgres de teste indisponível (stock_db): %v", err)
+	}
+
+	t.Cleanup(pool.Close)
+
+	return pool
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func newStockServiceTestServer(t *testing.T, stockPool *pgxpool.Pool) *httptest.Server {
+	t.Helper()
+
+	stockConnPool := repository.NewConnPool(stockPool)
+	productRepository := repository.NewProductRepository(stockPool)
+	productService := NewProductService(stockConnPool, productRepository)
+	productController := controllers.NewProductController(productService)
+
+	r := chi.NewRouter()
+	r.Use(middleware.Recoverer)
+	routes.ProductRoutes(r, productController)
+
+	server := httptest.NewServer(r)
+	t.Cleanup(server.Close)
+
+	return server
+}
+
+func newIntegrationOrderService(t *testing.T, stock int) (service *OrderService, stockPool *pgxpool.Pool, clientID, productID uuid.UUID) {
+	t.Helper()
+
+	ordersPool := newConcurrencyTestPool(t)
+	stockPool = newStockConcurrencyTestPool(t)
+
+	clientRepo := repository.NewClientRepository(ordersPool)
+	orderRepo := repository.NewOrderRepository(ordersPool)
+	itemRepo := repository.NewOrderItemRepository(ordersPool)
+
+	stockServer := newStockServiceTestServer(t, stockPool)
+	productStock := stockclient.New(stockServer.URL)
 
 	client, err := clientRepo.Create(context.Background(), domain.Client{
 		Name:         "Cliente Concorrência",
@@ -57,6 +119,7 @@ func newIntegrationOrderService(t *testing.T, stock int) (service *OrderService,
 		t.Fatalf("setup: falha ao criar cliente: %v", err)
 	}
 
+	productRepo := repository.NewProductRepository(stockPool)
 	product, err := productRepo.Create(context.Background(), domain.Product{
 		Name:  "Produto Concorrência " + uuid.NewString(),
 		Price: 10,
@@ -68,21 +131,21 @@ func newIntegrationOrderService(t *testing.T, stock int) (service *OrderService,
 
 	t.Cleanup(func() {
 		ctx := context.Background()
-		_, _ = pool.Exec(ctx, "DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE client_id = $1)", client.ID)
-		_, _ = pool.Exec(ctx, "DELETE FROM orders WHERE client_id = $1", client.ID)
+		_, _ = ordersPool.Exec(ctx, "DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE client_id = $1)", client.ID)
+		_, _ = ordersPool.Exec(ctx, "DELETE FROM orders WHERE client_id = $1", client.ID)
 		_ = productRepo.Delete(ctx, product.ID)
 		_ = clientRepo.Delete(ctx, client.ID)
 	})
 
-	service = NewOrderService(repository.NewConnPool(pool), orderRepo, itemRepo, productRepo, clientRepo)
-	return service, pool, client.ID, product.ID
+	service = NewOrderService(repository.NewConnPool(ordersPool), orderRepo, itemRepo, productStock, clientRepo)
+	return service, stockPool, client.ID, product.ID
 }
 
 func TestOrderService_Concorrencia_CriacaoNaoPermiteEstoqueNegativo(t *testing.T) {
 	const initialStock = 10
 	const attempts = 30
 
-	service, pool, clientID, productID := newIntegrationOrderService(t, initialStock)
+	service, stockPool, clientID, productID := newIntegrationOrderService(t, initialStock)
 
 	var successCount int64
 	var insufficientCount int64
@@ -124,7 +187,7 @@ func TestOrderService_Concorrencia_CriacaoNaoPermiteEstoqueNegativo(t *testing.T
 		t.Errorf("total de tentativas contabilizadas = %d, esperado %d", successCount+insufficientCount, int64(attempts))
 	}
 
-	productRepo := repository.NewProductRepository(pool)
+	productRepo := repository.NewProductRepository(stockPool)
 	product, err := productRepo.FindByID(context.Background(), productID)
 	if err != nil {
 		t.Fatalf("FindByID retornou erro inesperado: %v", err)
@@ -139,7 +202,7 @@ func TestOrderService_Concorrencia_CancelamentoNaoEstornaEstoqueDuasVezes(t *tes
 	const orderedQuantity = 10
 	const cancelAttempts = 10
 
-	service, pool, clientID, productID := newIntegrationOrderService(t, initialStock)
+	service, stockPool, clientID, productID := newIntegrationOrderService(t, initialStock)
 
 	created, err := service.Create(context.Background(), dto.CreateOrderRequest{
 		ClientID: clientID,
@@ -184,7 +247,7 @@ func TestOrderService_Concorrencia_CancelamentoNaoEstornaEstoqueDuasVezes(t *tes
 		t.Errorf("cancelamentos rejeitados como já cancelado = %d, esperado %d", alreadyCanceledCount, int64(cancelAttempts-1))
 	}
 
-	productRepo := repository.NewProductRepository(pool)
+	productRepo := repository.NewProductRepository(stockPool)
 	product, err := productRepo.FindByID(context.Background(), productID)
 	if err != nil {
 		t.Fatalf("FindByID retornou erro inesperado: %v", err)

@@ -11,19 +11,20 @@ import (
 	"github.com/isadeop/go-order-service-api/internal/infra/config"
 )
 
+// newTestPool conecta ao banco do order-service (orders_db)
 func newTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	cfg := config.Load()
+	cfg := config.Load("orders_db")
 
 	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
-		t.Skipf("não foi possível conectar ao postgres de teste: %v", err)
+		t.Skipf("não foi possível conectar ao postgres de teste (orders_db): %v", err)
 	}
 
 	if err := pool.Ping(context.Background()); err != nil {
 		pool.Close()
-		t.Skipf("postgres de teste indisponível: %v", err)
+		t.Skipf("postgres de teste indisponível (orders_db): %v", err)
 	}
 
 	t.Cleanup(pool.Close)
@@ -56,30 +57,6 @@ func createTestClient(t *testing.T, pool *pgxpool.Pool) domain.Client {
 	})
 
 	return client
-}
-
-// createTestProduct insere um produto com nome único e faz sua remoção ao final do teste
-func createTestProduct(t *testing.T, pool *pgxpool.Pool, stock int) domain.Product {
-	t.Helper()
-
-	repo := NewProductRepository(pool)
-
-	product, err := repo.Create(context.Background(), domain.Product{
-		Name:  "Produto de Teste de Integração " + uuid.NewString(),
-		Price: 10,
-		Stock: stock,
-	})
-	if err != nil {
-		t.Fatalf("setup: falha ao criar produto de teste: %v", err)
-	}
-
-	t.Cleanup(func() {
-		ctx := context.Background()
-		_, _ = pool.Exec(ctx, "DELETE FROM order_items WHERE product_id = $1", product.ID)
-		_ = repo.Delete(ctx, product.ID)
-	})
-
-	return product
 }
 
 func createTestOrder(t *testing.T, pool *pgxpool.Pool, clientID uuid.UUID, total float64) domain.Order {

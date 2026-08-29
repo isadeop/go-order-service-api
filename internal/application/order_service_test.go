@@ -129,25 +129,91 @@ func (e *erroringClientRepository) FindByEmail(ctx context.Context, email string
 	return domain.Client{}, e.err
 }
 
+type fakeProductStockGateway struct {
+	byID map[uuid.UUID]domain.Product
+
+	reserveErr error
+	releaseErr error
+
+	reserveCalls []reservedItem
+	releaseCalls []reservedItem
+}
+
+func newFakeProductStockGateway() *fakeProductStockGateway {
+	return &fakeProductStockGateway{byID: make(map[uuid.UUID]domain.Product)}
+}
+
+// Create simula o produto já existindo no stock-service.
+func (f *fakeProductStockGateway) Create(ctx context.Context, product domain.Product) (domain.Product, error) {
+	product.ID = uuid.New()
+	f.byID[product.ID] = product
+	return product, nil
+}
+
+func (f *fakeProductStockGateway) FindByID(ctx context.Context, id uuid.UUID) (domain.Product, error) {
+	product, ok := f.byID[id]
+	if !ok {
+		return domain.Product{}, custom_errors.ErrProductNotFound
+	}
+	return product, nil
+}
+
+func (f *fakeProductStockGateway) Reserve(ctx context.Context, productID uuid.UUID, quantity int) error {
+	f.reserveCalls = append(f.reserveCalls, reservedItem{productID: productID, quantity: quantity})
+
+	if f.reserveErr != nil {
+		return f.reserveErr
+	}
+
+	product, ok := f.byID[productID]
+	if !ok {
+		return custom_errors.ErrProductNotFound
+	}
+
+	if err := product.Reserve(quantity); err != nil {
+		return err
+	}
+
+	f.byID[productID] = product
+	return nil
+}
+
+func (f *fakeProductStockGateway) Release(ctx context.Context, productID uuid.UUID, quantity int) error {
+	f.releaseCalls = append(f.releaseCalls, reservedItem{productID: productID, quantity: quantity})
+
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
+
+	product, ok := f.byID[productID]
+	if !ok {
+		return custom_errors.ErrProductNotFound
+	}
+
+	product.Release(quantity)
+	f.byID[productID] = product
+	return nil
+}
+
 // orderServiceFixture agrupa os fakes usados para montar um OrderService pronto para teste
 type orderServiceFixture struct {
-	pool        *fakeConnPool
-	orderRepo   *fakeOrderRepository
-	itemRepo    *fakeOrderItemRepository
-	productRepo *fakeProductRepository
-	clientRepo  *fakeClientRepository
-	service     *OrderService
+	pool         *fakeConnPool
+	orderRepo    *fakeOrderRepository
+	itemRepo     *fakeOrderItemRepository
+	productStock *fakeProductStockGateway
+	clientRepo   *fakeClientRepository
+	service      *OrderService
 }
 
 func newOrderServiceFixture() *orderServiceFixture {
 	f := &orderServiceFixture{
-		pool:        newFakeConnPool(),
-		orderRepo:   newFakeOrderRepository(),
-		itemRepo:    newFakeOrderItemRepository(),
-		productRepo: newFakeProductRepository(),
-		clientRepo:  newFakeClientRepository(),
+		pool:         newFakeConnPool(),
+		orderRepo:    newFakeOrderRepository(),
+		itemRepo:     newFakeOrderItemRepository(),
+		productStock: newFakeProductStockGateway(),
+		clientRepo:   newFakeClientRepository(),
 	}
-	f.service = NewOrderService(f.pool, f.orderRepo, f.itemRepo, f.productRepo, f.clientRepo)
+	f.service = NewOrderService(f.pool, f.orderRepo, f.itemRepo, f.productStock, f.clientRepo)
 	return f
 }
 
@@ -157,7 +223,7 @@ func setupClientAndProduct(f *orderServiceFixture, stock int) (clientID, product
 		Email: uuid.NewString() + "@teste.com",
 	})
 
-	product, _ := f.productRepo.Create(context.Background(), domain.Product{
+	product, _ := f.productStock.Create(context.Background(), domain.Product{
 		Name:  uuid.NewString(),
 		Price: 10,
 		Stock: stock,
@@ -219,7 +285,7 @@ func TestOrderService_Create_ClienteInexistente(t *testing.T) {
 func TestOrderService_Create_ErroInesperadoAoBuscarCliente(t *testing.T) {
 	infraErr := errors.New("timeout de conexão")
 	f := newOrderServiceFixture()
-	f.service = NewOrderService(f.pool, f.orderRepo, f.itemRepo, f.productRepo, &erroringClientRepository{err: infraErr})
+	f.service = NewOrderService(f.pool, f.orderRepo, f.itemRepo, f.productStock, &erroringClientRepository{err: infraErr})
 
 	request := dto.CreateOrderRequest{
 		ClientID: uuid.New(),
@@ -325,7 +391,16 @@ func TestOrderService_Create_ProdutosDuplicadosSomamQuantidade(t *testing.T) {
 		t.Errorf("esperava 2 itens na resposta, obteve %d", len(response.Items))
 	}
 
-	product, _ := f.productRepo.FindByID(context.Background(), productID)
+	// Mesmo com 2 itens no pedido para o mesmo produto, a reserva no
+	// stock-service deve acontecer uma única vez, com a quantidade somada.
+	if len(f.productStock.reserveCalls) != 1 {
+		t.Fatalf("esperava 1 chamada de Reserve (quantidade agregada), obteve %d", len(f.productStock.reserveCalls))
+	}
+	if f.productStock.reserveCalls[0].quantity != 8 {
+		t.Errorf("quantidade reservada = %d, esperado 8", f.productStock.reserveCalls[0].quantity)
+	}
+
+	product, _ := f.productStock.FindByID(context.Background(), productID)
 	if product.Stock != 2 {
 		t.Errorf("estoque restante = %d, esperado 2 (10 - 8)", product.Stock)
 	}
@@ -374,16 +449,19 @@ func TestOrderService_Create_HappyPath(t *testing.T) {
 		t.Error("esperava que a transação fosse commitada no fluxo de sucesso")
 	}
 
-	product, _ := f.productRepo.FindByID(context.Background(), productID)
+	product, _ := f.productStock.FindByID(context.Background(), productID)
 	if product.Stock != 7 {
 		t.Errorf("estoque restante = %d, esperado 7", product.Stock)
 	}
+	if len(f.productStock.releaseCalls) != 0 {
+		t.Errorf("não deveria ter havido compensação (Release) no fluxo de sucesso, houve %d chamada(s)", len(f.productStock.releaseCalls))
+	}
 }
 
-func TestOrderService_Create_RollbackQuandoAtualizarEstoqueFalha(t *testing.T) {
+func TestOrderService_Create_ReservaFalhaAbortaAntesDaTransacaoLocal(t *testing.T) {
 	f := newOrderServiceFixture()
 	clientID, productID := setupClientAndProduct(f, 10)
-	f.productRepo.updateStockErr = errors.New("falha ao atualizar estoque")
+	f.productStock.reserveErr = errors.New("stock-service indisponível")
 
 	request := dto.CreateOrderRequest{
 		ClientID: clientID,
@@ -393,17 +471,17 @@ func TestOrderService_Create_RollbackQuandoAtualizarEstoqueFalha(t *testing.T) {
 	_, err := f.service.Create(context.Background(), request)
 
 	if err == nil {
-		t.Fatal("esperava erro ao atualizar estoque")
+		t.Fatal("esperava erro ao reservar estoque")
 	}
 	if f.pool.tx.committed {
-		t.Error("transação não deveria ter sido commitada quando UpdateStock falha")
+		t.Error("transação local não deveria ter sido commitada quando a reserva falha")
 	}
-	if !f.pool.tx.rolledBack {
-		t.Error("esperava rollback da transação quando UpdateStock falha")
+	if f.pool.tx.rolledBack {
+		t.Error("transação local nunca deveria ter sido aberta quando a reserva falha antes do Begin")
 	}
 }
 
-func TestOrderService_Create_ErroAoCommitarEhPropagado(t *testing.T) {
+func TestOrderService_Create_FalhaAposReservaCompensaEstoqueJaReservado(t *testing.T) {
 	f := newOrderServiceFixture()
 	clientID, productID := setupClientAndProduct(f, 10)
 	commitErr := errors.New("falha de rede ao commitar")
@@ -411,13 +489,25 @@ func TestOrderService_Create_ErroAoCommitarEhPropagado(t *testing.T) {
 
 	request := dto.CreateOrderRequest{
 		ClientID: clientID,
-		Items:    []dto.CreateOrderItemRequest{{ProductID: productID, Quantity: intPtr(1)}},
+		Items:    []dto.CreateOrderItemRequest{{ProductID: productID, Quantity: intPtr(4)}},
 	}
 
 	_, err := f.service.Create(context.Background(), request)
 
 	if !errors.Is(err, commitErr) {
 		t.Errorf("esperava que o erro de commit fosse propagado, obteve: %v", err)
+	}
+
+	if len(f.productStock.releaseCalls) != 1 {
+		t.Fatalf("esperava 1 chamada de compensação (Release), obteve %d", len(f.productStock.releaseCalls))
+	}
+	if f.productStock.releaseCalls[0].quantity != 4 {
+		t.Errorf("quantidade compensada = %d, esperado 4", f.productStock.releaseCalls[0].quantity)
+	}
+
+	product, _ := f.productStock.FindByID(context.Background(), productID)
+	if product.Stock != 10 {
+		t.Errorf("estoque após compensação = %d, esperado 10 (reserva desfeita)", product.Stock)
 	}
 }
 
@@ -495,8 +585,8 @@ func TestOrderService_Pay_RollbackQuandoAtualizarStatusFalha(t *testing.T) {
 func TestOrderService_Cancel_HappyPathEstornaEstoque(t *testing.T) {
 	f := newOrderServiceFixture()
 	clientID, productID := setupClientAndProduct(f, 10)
-	// Simula que 3 unidades já haviam sido debitadas na criação do pedido.
-	if err := f.productRepo.UpdateStock(context.Background(), nil, productID, -3); err != nil {
+	// Simula que 3 unidades já haviam sido reservadas na criação do pedido.
+	if err := f.productStock.Reserve(context.Background(), productID, 3); err != nil {
 		t.Fatalf("setup do estoque falhou: %v", err)
 	}
 	orderID := seedOrder(f, clientID, domain.OrderStatusPending, 30)
@@ -515,7 +605,7 @@ func TestOrderService_Cancel_HappyPathEstornaEstoque(t *testing.T) {
 		t.Error("esperava que a transação fosse commitada no fluxo de sucesso")
 	}
 
-	product, _ := f.productRepo.FindByID(context.Background(), productID)
+	product, _ := f.productStock.FindByID(context.Background(), productID)
 	if product.Stock != 10 {
 		t.Errorf("estoque após estorno = %d, esperado 10 (estoque original restaurado)", product.Stock)
 	}
@@ -563,7 +653,7 @@ func TestOrderService_Cancel_RollbackQuandoEstornoFalha(t *testing.T) {
 	if _, err := f.itemRepo.Create(context.Background(), nil, domain.OrderItem{OrderID: orderID, ProductID: productID, Quantity: 3, Price: 10}); err != nil {
 		t.Fatalf("setup do item falhou: %v", err)
 	}
-	f.productRepo.updateStockErr = errors.New("falha ao estornar estoque")
+	f.productStock.releaseErr = errors.New("falha ao estornar estoque")
 
 	_, err := f.service.Cancel(context.Background(), orderID)
 
@@ -631,7 +721,7 @@ func TestOrderService_UpdateStatus_ParaPagoHappyPath(t *testing.T) {
 func TestOrderService_UpdateStatus_ParaCanceladoEstornaEstoque(t *testing.T) {
 	f := newOrderServiceFixture()
 	clientID, productID := setupClientAndProduct(f, 10)
-	if err := f.productRepo.UpdateStock(context.Background(), nil, productID, -4); err != nil {
+	if err := f.productStock.Reserve(context.Background(), productID, 4); err != nil {
 		t.Fatalf("setup do estoque falhou: %v", err)
 	}
 	orderID := seedOrder(f, clientID, domain.OrderStatusPending, 40)
@@ -647,7 +737,7 @@ func TestOrderService_UpdateStatus_ParaCanceladoEstornaEstoque(t *testing.T) {
 		t.Error("esperava que a transação fosse commitada no fluxo de sucesso")
 	}
 
-	product, _ := f.productRepo.FindByID(context.Background(), productID)
+	product, _ := f.productStock.FindByID(context.Background(), productID)
 	if product.Stock != 10 {
 		t.Errorf("estoque após estorno = %d, esperado 10", product.Stock)
 	}

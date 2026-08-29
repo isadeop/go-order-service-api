@@ -24,7 +24,9 @@ type DatabaseConfig struct {
 	SSLMode  string
 }
 
-func Load() Config {
+// Load lê a configuração a partir de variáveis de ambiente (ou .env).
+// defaultDatabaseName é usado só quando POSTGRES_DB não está definida
+func Load(defaultDatabaseName string) Config {
 	if err := godotenv.Load(); err != nil {
 		log.Println("arquivo .env nao encontrado, usando variaveis do ambiente")
 	}
@@ -34,7 +36,7 @@ func Load() Config {
 		Port:     getEnv("POSTGRES_PORT", "5432"),
 		User:     getEnv("POSTGRES_USER", "adm"),
 		Password: getEnv("POSTGRES_PASSWORD", "adm"),
-		Name:     getEnv("POSTGRES_DB", "orderserviceapi"),
+		Name:     getEnv("POSTGRES_DB", defaultDatabaseName),
 		SSLMode:  getEnv("POSTGRES_SSLMODE", "disable"),
 	}
 

@@ -1,73 +1,193 @@
-#   docker compose up --build        -> sobe tudo (aplica migrations e inicia a API)
-#   docker compose up -d postgres    -> sobe só o banco (para rodar "go run"/"go test" direto no host)
-#   docker compose down -v           -> derruba tudo e apaga o volume de dados
+#   docker compose up --build              -> sobe tudo (migrations + os dois serviços)
+#   docker compose up -d postgres-orders postgres-stock migrate-orders migrate-stock
+#                                           -> sobe só os bancos (para rodar "go run"/"go test" direto no host)
+#   docker compose down -v                 -> derruba tudo e apaga os dados
 #
 # Credenciais abaixo são as mesmas de exemplo já usadas em .env/README —
-# Projeto apenas de estudo, sem dados reais.
+# projeto apenas de estudo, sem dados reais.
 
-x-postgres-env: &postgres-env
+x-postgres-credentials: &postgres-credentials
   POSTGRES_USER: adm
   POSTGRES_PASSWORD: adm
-  POSTGRES_DB: orderserviceapi
+
+x-postgres-healthcheck: &postgres-healthcheck
+  interval: 5s
+  timeout: 5s
+  retries: 10
 
 services:
-  postgres:
+  postgres-orders:
     # A partir da versão 18 por conta do uuidv7() como default de UUID.
     image: postgres:18-alpine
     container_name: order-service-postgres
     environment:
-      <<: *postgres-env
+      <<: *postgres-credentials
+      POSTGRES_DB: orders_db
     ports:
-      - "5432:5432"
+      - "5434:5432"
     volumes:
-      - order_service_postgres_data:/var/lib/postgresql
+      - orders_postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      <<: *postgres-healthcheck
+      test: ["CMD-SHELL", "pg_isready -U adm -d orders_db"]
     networks:
       - order-service-net
 
-  migrate:
+  postgres-stock:
+    image: postgres:18-alpine
+    container_name: stock-service-postgres
+    environment:
+      <<: *postgres-credentials
+      POSTGRES_DB: stock_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - stock_postgres_data:/var/lib/postgresql
+    healthcheck:
+      <<: *postgres-healthcheck
+      test: ["CMD-SHELL", "pg_isready -U adm -d stock_db"]
+    networks:
+      - order-service-net
+
+  migrate-orders:
     image: migrate/migrate:v4.17.1
     container_name: order-service-migrate
     depends_on:
-      postgres:
+      postgres-orders:
         condition: service_healthy
     volumes:
-      - ./internal/migrations:/migrations:ro
+      - ./internal/migrations/orders:/migrations:ro
     command:
       - -path=/migrations
-      - -database=postgres://adm:adm@postgres:5432/orderserviceapi?sslmode=disable
+      - -database=postgres://adm:adm@postgres-orders:5432/orders_db?sslmode=disable
       - up
     restart: "no"
     networks:
       - order-service-net
 
-  api:
+  migrate-stock:
+    image: migrate/migrate:v4.17.1
+    container_name: stock-service-migrate
+    depends_on:
+      postgres-stock:
+        condition: service_healthy
+    volumes:
+      - ./internal/migrations/stock:/migrations:ro
+    command:
+      - -path=/migrations
+      - -database=postgres://adm:adm@postgres-stock:5432/stock_db?sslmode=disable
+      - up
+    restart: "no"
+    networks:
+      - order-service-net
+
+  order-service:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        SERVICE: order-service
     container_name: order-service-api
     environment:
-      <<: *postgres-env
+      <<: *postgres-credentials
       PORT: "8080"
-      POSTGRES_HOST: postgres
+      POSTGRES_HOST: postgres-orders
       POSTGRES_PORT: "5432"
+      POSTGRES_DB: orders_db
       POSTGRES_SSLMODE: disable
+      STOCK_SERVICE_URL: http://stock-service:8080
     ports:
+      # /clientes e /pedidos
       - "8080:8080"
     depends_on:
-      postgres:
+      postgres-orders:
         condition: service_healthy
-      migrate:
+      migrate-orders:
+        condition: service_completed_successfully
+      stock-service:
+        condition: service_started
+    networks:
+      - order-service-net
+
+  stock-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: stock-service
+    container_name: stock-service-api
+    environment:
+      <<: *postgres-credentials
+      PORT: "8080"
+      POSTGRES_HOST: postgres-stock
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: stock_db
+      POSTGRES_SSLMODE: disable
+    ports:
+      # /produtos
+      - "8081:8080"
+    depends_on:
+      postgres-stock:
+        condition: service_healthy
+      migrate-stock:
         condition: service_completed_successfully
     networks:
       - order-service-net
 
+  # Broker de mensageria (Etapa 8): só a infraestrutura de pé por enquanto,
+  # nenhum serviço publica/consome nada ainda — isso é a Etapa 9. Um único
+  # nó, modo dev (--mode dev-container relaxa checagens de recurso feitas
+  # pra cluster de produção, apropriado para uma máquina de desenvolvimento).
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: redpanda
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr=internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr=internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr=internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr=redpanda:33145
+      - --advertise-rpc-addr=redpanda:33145
+    ports:
+      # Kafka API, exposta no host para permitir produzir/consumir direto
+      # da máquina (ex.: um cliente Go rodando fora do Docker).
+      - "19092:19092"
+      # Schema Registry / Pandaproxy (REST) / Admin API — úteis para
+      # inspecionar o cluster de fora do container.
+      - "18081:18081"
+      - "18082:18082"
+      - "9644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - order-service-net
+
+  # UI web para inspecionar tópicos/mensagens do Redpanda — opcional, só
+  # facilita demonstrar que a mensageria está funcionando.
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:latest
+    container_name: redpanda-console
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      - "8090:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    networks:
+      - order-service-net
+
 volumes:
-  order_service_postgres_data:
+  orders_postgres_data:
+  stock_postgres_data:
 
 networks:
   order-service-net:

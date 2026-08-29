@@ -15,14 +15,18 @@ import (
 )
 
 type fakeProductService struct {
-	createResponse dto.ProductResponse
-	createErr      error
-	findAllResp    []dto.ProductResponse
-	findAllErr     error
-	findByIDErr    error
-	updateResponse dto.ProductResponse
-	updateErr      error
-	deleteErr      error
+	createResponse  dto.ProductResponse
+	createErr       error
+	findAllResp     []dto.ProductResponse
+	findAllErr      error
+	findByIDErr     error
+	updateResponse  dto.ProductResponse
+	updateErr       error
+	reserveResponse dto.ProductResponse
+	reserveErr      error
+	releaseResponse dto.ProductResponse
+	releaseErr      error
+	deleteErr       error
 }
 
 func (f *fakeProductService) Create(ctx context.Context, request dto.CreateProductRequest) (dto.ProductResponse, error) {
@@ -41,6 +45,14 @@ func (f *fakeProductService) Update(ctx context.Context, id uuid.UUID, request d
 	return f.updateResponse, f.updateErr
 }
 
+func (f *fakeProductService) Reserve(ctx context.Context, id uuid.UUID, quantity int) (dto.ProductResponse, error) {
+	return f.reserveResponse, f.reserveErr
+}
+
+func (f *fakeProductService) Release(ctx context.Context, id uuid.UUID, quantity int) (dto.ProductResponse, error) {
+	return f.releaseResponse, f.releaseErr
+}
+
 func (f *fakeProductService) Delete(ctx context.Context, id uuid.UUID) error {
 	return f.deleteErr
 }
@@ -52,6 +64,8 @@ func newProductRouter(service ProductService) http.Handler {
 	r.Get("/produtos", controller.FindAllProducts)
 	r.Get("/produtos/{id}", controller.FindProductByID)
 	r.Put("/produtos/{id}", controller.UpdateProduct)
+	r.Post("/produtos/{id}/reservar", controller.Reserve)
+	r.Post("/produtos/{id}/liberar", controller.Release)
 	r.Delete("/produtos/{id}", controller.DeleteProduct)
 	return r
 }
@@ -153,6 +167,66 @@ func TestProductController_UpdateProduct_HappyPath(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, esperado %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestProductController_Reserve_HappyPath(t *testing.T) {
+	service := &fakeProductService{reserveResponse: dto.ProductResponse{Name: "Notebook", Stock: 7}}
+	router := newProductRouter(service)
+
+	body := `{"quantity":3}`
+	req := httptest.NewRequest(http.MethodPost, "/produtos/"+uuid.New().String()+"/reservar", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, esperado %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestProductController_Reserve_EstoqueInsuficiente(t *testing.T) {
+	service := &fakeProductService{reserveErr: custom_errors.ErrInsufficientStock}
+	router := newProductRouter(service)
+
+	body := `{"quantity":100}`
+	req := httptest.NewRequest(http.MethodPost, "/produtos/"+uuid.New().String()+"/reservar", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, esperado %d", rec.Code, http.StatusConflict)
+	}
+}
+
+func TestProductController_Release_HappyPath(t *testing.T) {
+	service := &fakeProductService{releaseResponse: dto.ProductResponse{Name: "Notebook", Stock: 10}}
+	router := newProductRouter(service)
+
+	body := `{"quantity":3}`
+	req := httptest.NewRequest(http.MethodPost, "/produtos/"+uuid.New().String()+"/liberar", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, esperado %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestProductController_Release_ProdutoNaoEncontrado(t *testing.T) {
+	service := &fakeProductService{releaseErr: custom_errors.ErrProductNotFound}
+	router := newProductRouter(service)
+
+	body := `{"quantity":1}`
+	req := httptest.NewRequest(http.MethodPost, "/produtos/"+uuid.New().String()+"/liberar", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, esperado %d", rec.Code, http.StatusNotFound)
 	}
 }
 

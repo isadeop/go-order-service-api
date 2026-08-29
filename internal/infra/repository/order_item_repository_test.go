@@ -11,11 +11,14 @@ import (
 	"github.com/isadeop/go-order-service-api/internal/domain"
 )
 
+// order_items não tem mais FK para products (bancos separados) — o
+// product_id é só um UUID validado pela aplicação, não pelo banco.
+
 func TestOrderItemRepository_Create_HappyPath(t *testing.T) {
 	pool := newTestPool(t)
 	client := createTestClient(t, pool)
 	order := createTestOrder(t, pool, client.ID, 0)
-	product := createTestProduct(t, pool, 10)
+	productID := uuid.New()
 	repo := NewOrderItemRepository(pool)
 
 	tx, err := pool.Begin(context.Background())
@@ -26,9 +29,9 @@ func TestOrderItemRepository_Create_HappyPath(t *testing.T) {
 
 	item, err := repo.Create(context.Background(), tx, domain.OrderItem{
 		OrderID:   order.ID,
-		ProductID: product.ID,
+		ProductID: productID,
 		Quantity:  2,
-		Price:     product.Price,
+		Price:     10,
 	})
 	if err != nil {
 		t.Fatalf("Create retornou erro inesperado: %v", err)
@@ -44,7 +47,7 @@ func TestOrderItemRepository_Create_HappyPath(t *testing.T) {
 
 func TestOrderItemRepository_Create_PedidoInexistenteViolaFK(t *testing.T) {
 	pool := newTestPool(t)
-	product := createTestProduct(t, pool, 10)
+	productID := uuid.New()
 	repo := NewOrderItemRepository(pool)
 
 	tx, err := pool.Begin(context.Background())
@@ -55,9 +58,9 @@ func TestOrderItemRepository_Create_PedidoInexistenteViolaFK(t *testing.T) {
 
 	_, err = repo.Create(context.Background(), tx, domain.OrderItem{
 		OrderID:   uuid.New(), // pedido que não existe
-		ProductID: product.ID,
+		ProductID: productID,
 		Quantity:  1,
-		Price:     product.Price,
+		Price:     10,
 	})
 
 	if err == nil {
@@ -69,7 +72,7 @@ func TestOrderItemRepository_Create_QuantidadeInvalidaViolaConstraint(t *testing
 	pool := newTestPool(t)
 	client := createTestClient(t, pool)
 	order := createTestOrder(t, pool, client.ID, 0)
-	product := createTestProduct(t, pool, 10)
+	productID := uuid.New()
 	repo := NewOrderItemRepository(pool)
 
 	tx, err := pool.Begin(context.Background())
@@ -80,9 +83,9 @@ func TestOrderItemRepository_Create_QuantidadeInvalidaViolaConstraint(t *testing
 
 	_, err = repo.Create(context.Background(), tx, domain.OrderItem{
 		OrderID:   order.ID,
-		ProductID: product.ID,
+		ProductID: productID,
 		Quantity:  0,
-		Price:     product.Price,
+		Price:     10,
 	})
 
 	if err == nil {
@@ -105,8 +108,8 @@ func TestOrderItemRepository_FindByOrderID_HappyPath(t *testing.T) {
 	pool := newTestPool(t)
 	client := createTestClient(t, pool)
 	order := createTestOrder(t, pool, client.ID, 0)
-	productA := createTestProduct(t, pool, 10)
-	productB := createTestProduct(t, pool, 10)
+	productA := uuid.New()
+	productB := uuid.New()
 	repo := NewOrderItemRepository(pool)
 
 	tx, err := pool.Begin(context.Background())
@@ -114,11 +117,11 @@ func TestOrderItemRepository_FindByOrderID_HappyPath(t *testing.T) {
 		t.Fatalf("setup: falha ao abrir transação: %v", err)
 	}
 
-	if _, err := repo.Create(context.Background(), tx, domain.OrderItem{OrderID: order.ID, ProductID: productA.ID, Quantity: 1, Price: 10}); err != nil {
+	if _, err := repo.Create(context.Background(), tx, domain.OrderItem{OrderID: order.ID, ProductID: productA, Quantity: 1, Price: 10}); err != nil {
 		tx.Rollback(context.Background())
 		t.Fatalf("setup: falha ao criar item: %v", err)
 	}
-	if _, err := repo.Create(context.Background(), tx, domain.OrderItem{OrderID: order.ID, ProductID: productB.ID, Quantity: 2, Price: 20}); err != nil {
+	if _, err := repo.Create(context.Background(), tx, domain.OrderItem{OrderID: order.ID, ProductID: productB, Quantity: 2, Price: 20}); err != nil {
 		tx.Rollback(context.Background())
 		t.Fatalf("setup: falha ao criar item: %v", err)
 	}

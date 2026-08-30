@@ -19,19 +19,22 @@ const (
 		(
 			client_id,
 			status,
-			total
+			total,
+			saga_id
 		)
 		VALUES
 		(
 			$1,
 			$2,
-			$3
+			$3,
+			$4
 		)
 		RETURNING
 			id,
 			client_id,
 			status,
 			total,
+			saga_id,
 			created_at
 	`
 
@@ -41,6 +44,7 @@ const (
 			client_id,
 			status,
 			total,
+			saga_id,
 			created_at
 		FROM orders
 		ORDER BY created_at DESC
@@ -54,6 +58,7 @@ const (
 			client_id,
 			status,
 			total,
+			saga_id,
 			created_at
 		FROM orders
 		WHERE id = $1
@@ -65,6 +70,7 @@ const (
 			client_id,
 			status,
 			total,
+			saga_id,
 			created_at
 		FROM orders
 		WHERE id = $1
@@ -86,6 +92,7 @@ const (
 			client_id,
 			status,
 			total,
+			saga_id,
 			created_at
 	`
 )
@@ -117,11 +124,13 @@ func (repo *OrderRepository) Create(
 		order.ClientID,
 		order.Status,
 		order.Total,
+		order.SagaID,
 	).Scan(
 		&order.ID,
 		&order.ClientID,
 		&order.Status,
 		&order.Total,
+		&order.SagaID,
 		&order.CreatedAt,
 	)
 
@@ -148,6 +157,7 @@ func (repo *OrderRepository) FindByID(
 		&order.ClientID,
 		&order.Status,
 		&order.Total,
+		&order.SagaID,
 		&order.CreatedAt,
 	)
 
@@ -184,6 +194,7 @@ func (repo *OrderRepository) FindByIDForUpdate(
 		&order.ClientID,
 		&order.Status,
 		&order.Total,
+		&order.SagaID,
 		&order.CreatedAt,
 	)
 
@@ -227,6 +238,7 @@ func (repo *OrderRepository) FindAll(
 			&order.ClientID,
 			&order.Status,
 			&order.Total,
+			&order.SagaID,
 			&order.CreatedAt,
 		)
 
@@ -290,6 +302,7 @@ func (repo *OrderRepository) UpdateStatus(
 		&order.ClientID,
 		&order.Status,
 		&order.Total,
+		&order.SagaID,
 		&order.CreatedAt,
 	)
 

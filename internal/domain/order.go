@@ -13,6 +13,7 @@ type Order struct {
 	ClientID  uuid.UUID   `json:"client_id"`
 	Status    OrderStatus `json:"status"`
 	Total     float64     `json:"total"`
+	SagaID    uuid.UUID   `json:"-"`
 	CreatedAt time.Time   `json:"created_at"`
 }
 

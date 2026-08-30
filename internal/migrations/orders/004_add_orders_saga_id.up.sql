@@ -1,0 +1,1 @@
+ALTER TABLE orders ADD COLUMN saga_id UUID NOT NULL DEFAULT uuidv7();

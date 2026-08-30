@@ -1,6 +1,3 @@
-// Package stockclient implementa, via HTTP, a porta application.ProductStockGateway
-// É a única forma do order-service consultar e reservar/liberar estoque de produtos
-
 package stockclient
 
 import (
@@ -72,22 +69,18 @@ func (c *Client) FindByID(ctx context.Context, id uuid.UUID) (domain.Product, er
 }
 
 type quantityRequest struct {
-	Quantity int `json:"quantity"`
+	Quantity int       `json:"quantity"`
+	SagaID   uuid.UUID `json:"saga_id"`
 }
 
-// Reserve chama POST /produtos/{id}/reservar.
-func (c *Client) Reserve(ctx context.Context, productID uuid.UUID, quantity int) error {
-	return c.postQuantity(ctx, "reservar", productID, quantity)
+// Release chama POST /produtos/{id}/liberar
+func (c *Client) Release(ctx context.Context, sagaID uuid.UUID, productID uuid.UUID, quantity int) error {
+	return c.postQuantity(ctx, "liberar", sagaID, productID, quantity)
 }
 
-// Release chama POST /produtos/{id}/liberar.
-func (c *Client) Release(ctx context.Context, productID uuid.UUID, quantity int) error {
-	return c.postQuantity(ctx, "liberar", productID, quantity)
-}
+func (c *Client) postQuantity(ctx context.Context, action string, sagaID uuid.UUID, productID uuid.UUID, quantity int) error {
 
-func (c *Client) postQuantity(ctx context.Context, action string, productID uuid.UUID, quantity int) error {
-
-	payload, err := json.Marshal(quantityRequest{Quantity: quantity})
+	payload, err := json.Marshal(quantityRequest{Quantity: quantity, SagaID: sagaID})
 	if err != nil {
 		return fmt.Errorf("stockclient: montar payload: %w", err)
 	}

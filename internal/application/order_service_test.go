@@ -129,14 +129,20 @@ func (e *erroringClientRepository) FindByEmail(ctx context.Context, email string
 	return domain.Client{}, e.err
 }
 
+type gatewayCall struct {
+	sagaID    uuid.UUID
+	productID uuid.UUID
+	quantity  int
+}
+
 type fakeProductStockGateway struct {
 	byID map[uuid.UUID]domain.Product
 
 	reserveErr error
 	releaseErr error
 
-	reserveCalls []reservedItem
-	releaseCalls []reservedItem
+	reserveCalls []gatewayCall
+	releaseCalls []gatewayCall
 }
 
 func newFakeProductStockGateway() *fakeProductStockGateway {
@@ -158,8 +164,8 @@ func (f *fakeProductStockGateway) FindByID(ctx context.Context, id uuid.UUID) (d
 	return product, nil
 }
 
-func (f *fakeProductStockGateway) Reserve(ctx context.Context, productID uuid.UUID, quantity int) error {
-	f.reserveCalls = append(f.reserveCalls, reservedItem{productID: productID, quantity: quantity})
+func (f *fakeProductStockGateway) Reserve(ctx context.Context, sagaID uuid.UUID, productID uuid.UUID, quantity int) error {
+	f.reserveCalls = append(f.reserveCalls, gatewayCall{sagaID: sagaID, productID: productID, quantity: quantity})
 
 	if f.reserveErr != nil {
 		return f.reserveErr
@@ -178,8 +184,8 @@ func (f *fakeProductStockGateway) Reserve(ctx context.Context, productID uuid.UU
 	return nil
 }
 
-func (f *fakeProductStockGateway) Release(ctx context.Context, productID uuid.UUID, quantity int) error {
-	f.releaseCalls = append(f.releaseCalls, reservedItem{productID: productID, quantity: quantity})
+func (f *fakeProductStockGateway) Release(ctx context.Context, sagaID uuid.UUID, productID uuid.UUID, quantity int) error {
+	f.releaseCalls = append(f.releaseCalls, gatewayCall{sagaID: sagaID, productID: productID, quantity: quantity})
 
 	if f.releaseErr != nil {
 		return f.releaseErr
@@ -481,6 +487,29 @@ func TestOrderService_Create_ReservaFalhaAbortaAntesDaTransacaoLocal(t *testing.
 	}
 }
 
+func TestOrderService_Create_ReservaFalhaDisparaLiberacaoDefensiva(t *testing.T) {
+	f := newOrderServiceFixture()
+	clientID, productID := setupClientAndProduct(f, 10)
+	f.productStock.reserveErr = errors.New("timeout esperando resposta da reserva de estoque")
+
+	request := dto.CreateOrderRequest{
+		ClientID: clientID,
+		Items:    []dto.CreateOrderItemRequest{{ProductID: productID, Quantity: intPtr(1)}},
+	}
+
+	_, err := f.service.Create(context.Background(), request)
+
+	if err == nil {
+		t.Fatal("esperava erro ao reservar estoque")
+	}
+	if len(f.productStock.releaseCalls) != 1 {
+		t.Fatalf("esperava 1 chamada de liberação defensiva, obteve %d", len(f.productStock.releaseCalls))
+	}
+	if f.productStock.releaseCalls[0].productID != productID || f.productStock.releaseCalls[0].quantity != 1 {
+		t.Errorf("chamada de liberação defensiva inesperada: %+v", f.productStock.releaseCalls[0])
+	}
+}
+
 func TestOrderService_Create_FalhaAposReservaCompensaEstoqueJaReservado(t *testing.T) {
 	f := newOrderServiceFixture()
 	clientID, productID := setupClientAndProduct(f, 10)
@@ -503,6 +532,10 @@ func TestOrderService_Create_FalhaAposReservaCompensaEstoqueJaReservado(t *testi
 	}
 	if f.productStock.releaseCalls[0].quantity != 4 {
 		t.Errorf("quantidade compensada = %d, esperado 4", f.productStock.releaseCalls[0].quantity)
+	}
+	if len(f.productStock.reserveCalls) != 1 || f.productStock.releaseCalls[0].sagaID != f.productStock.reserveCalls[0].sagaID {
+		t.Errorf("a liberação deveria usar o mesmo saga_id da reserva original (Etapa 10): reserve=%+v release=%+v",
+			f.productStock.reserveCalls, f.productStock.releaseCalls)
 	}
 
 	product, _ := f.productStock.FindByID(context.Background(), productID)
@@ -586,7 +619,7 @@ func TestOrderService_Cancel_HappyPathEstornaEstoque(t *testing.T) {
 	f := newOrderServiceFixture()
 	clientID, productID := setupClientAndProduct(f, 10)
 	// Simula que 3 unidades já haviam sido reservadas na criação do pedido.
-	if err := f.productStock.Reserve(context.Background(), productID, 3); err != nil {
+	if err := f.productStock.Reserve(context.Background(), uuid.New(), productID, 3); err != nil {
 		t.Fatalf("setup do estoque falhou: %v", err)
 	}
 	orderID := seedOrder(f, clientID, domain.OrderStatusPending, 30)
@@ -721,7 +754,7 @@ func TestOrderService_UpdateStatus_ParaPagoHappyPath(t *testing.T) {
 func TestOrderService_UpdateStatus_ParaCanceladoEstornaEstoque(t *testing.T) {
 	f := newOrderServiceFixture()
 	clientID, productID := setupClientAndProduct(f, 10)
-	if err := f.productStock.Reserve(context.Background(), productID, 4); err != nil {
+	if err := f.productStock.Reserve(context.Background(), uuid.New(), productID, 4); err != nil {
 		t.Fatalf("setup do estoque falhou: %v", err)
 	}
 	orderID := seedOrder(f, clientID, domain.OrderStatusPending, 40)

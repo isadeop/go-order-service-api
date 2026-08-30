@@ -24,8 +24,10 @@ type fakeProductService struct {
 	updateErr       error
 	reserveResponse dto.ProductResponse
 	reserveErr      error
+	reserveSagaID   uuid.UUID
 	releaseResponse dto.ProductResponse
 	releaseErr      error
+	releaseSagaID   uuid.UUID
 	deleteErr       error
 }
 
@@ -45,11 +47,13 @@ func (f *fakeProductService) Update(ctx context.Context, id uuid.UUID, request d
 	return f.updateResponse, f.updateErr
 }
 
-func (f *fakeProductService) Reserve(ctx context.Context, id uuid.UUID, quantity int) (dto.ProductResponse, error) {
+func (f *fakeProductService) Reserve(ctx context.Context, sagaID uuid.UUID, id uuid.UUID, quantity int) (dto.ProductResponse, error) {
+	f.reserveSagaID = sagaID
 	return f.reserveResponse, f.reserveErr
 }
 
-func (f *fakeProductService) Release(ctx context.Context, id uuid.UUID, quantity int) (dto.ProductResponse, error) {
+func (f *fakeProductService) Release(ctx context.Context, sagaID uuid.UUID, id uuid.UUID, quantity int) (dto.ProductResponse, error) {
+	f.releaseSagaID = sagaID
 	return f.releaseResponse, f.releaseErr
 }
 
@@ -212,6 +216,43 @@ func TestProductController_Release_HappyPath(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, esperado %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestProductController_Reserve_SagaIDRepassadoQuandoInformado(t *testing.T) {
+	service := &fakeProductService{reserveResponse: dto.ProductResponse{Name: "Notebook", Stock: 7}}
+	router := newProductRouter(service)
+
+	sagaID := uuid.New()
+	body := `{"quantity":3,"saga_id":"` + sagaID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/produtos/"+uuid.New().String()+"/reservar", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, esperado %d", rec.Code, http.StatusOK)
+	}
+	if service.reserveSagaID != sagaID {
+		t.Errorf("saga_id repassado ao service = %v, esperado %v", service.reserveSagaID, sagaID)
+	}
+}
+
+func TestProductController_Reserve_SagaIDGeradoQuandoOmitido(t *testing.T) {
+	service := &fakeProductService{reserveResponse: dto.ProductResponse{Name: "Notebook", Stock: 7}}
+	router := newProductRouter(service)
+
+	body := `{"quantity":3}`
+	req := httptest.NewRequest(http.MethodPost, "/produtos/"+uuid.New().String()+"/reservar", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, esperado %d", rec.Code, http.StatusOK)
+	}
+	if service.reserveSagaID == uuid.Nil {
+		t.Error("esperava que o controller gerasse um saga_id quando omitido, obteve uuid.Nil")
 	}
 }
 

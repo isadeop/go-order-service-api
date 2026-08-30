@@ -32,11 +32,12 @@ type OrderItemRepository interface {
 }
 
 // ProductStockGateway é a porta que o order-service usa para consultar e
-// reservar/liberar estoque de produtos.
+// reservar/liberar estoque de produtos. Reserve é a etapa de reserva de
+// estoque da Saga de criação de pedido
 type ProductStockGateway interface {
 	FindByID(ctx context.Context, id uuid.UUID) (domain.Product, error)
-	Reserve(ctx context.Context, productID uuid.UUID, quantity int) error
-	Release(ctx context.Context, productID uuid.UUID, quantity int) error
+	Reserve(ctx context.Context, sagaID uuid.UUID, productID uuid.UUID, quantity int) error
+	Release(ctx context.Context, sagaID uuid.UUID, productID uuid.UUID, quantity int) error
 }
 
 // reservedItem registra uma reserva de estoque já confirmada pelo
@@ -69,12 +70,13 @@ func NewOrderService(pool ConnPool,
 	}
 }
 
-func (s *OrderService) compensateReservations(ctx context.Context, reserved []reservedItem) {
+func (s *OrderService) compensateReservations(ctx context.Context, sagaID uuid.UUID, reserved []reservedItem) {
 	for _, item := range reserved {
-		if err := s.productStock.Release(ctx, item.productID, item.quantity); err != nil {
+		if err := s.productStock.Release(ctx, sagaID, item.productID, item.quantity); err != nil {
 			slog.Error("order.create.compensation_failed",
 				"operation", "Create",
 				"result", "error",
+				"saga_id", sagaID.String(),
 				"product_id", item.productID.String(),
 				"quantity", item.quantity,
 				"err", err.Error(),
@@ -102,6 +104,10 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
+
+	// sagaID identifica a tentativa de criação de pedido.
+	// Se a reserva de estoque falhar, a tentativa ainda é rastreável nos logs por este ID.
+	sagaID := uuid.New()
 
 	quantities := make(map[uuid.UUID]int)
 	productOrder := make([]uuid.UUID, 0, len(request.Items))
@@ -154,8 +160,20 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 
 		quantity := quantities[productID]
 
-		if err := s.productStock.Reserve(ctx, productID, quantity); err != nil {
-			s.compensateReservations(ctx, reserved)
+		if err := s.productStock.Reserve(ctx, sagaID, productID, quantity); err != nil {
+			s.compensateReservations(ctx, sagaID, reserved)
+
+			if releaseErr := s.productStock.Release(ctx, sagaID, productID, quantity); releaseErr != nil {
+				slog.Error("order.create.defensive_release_failed",
+					"operation", "Create",
+					"result", "error",
+					"saga_id", sagaID.String(),
+					"product_id", productID.String(),
+					"quantity", quantity,
+					"err", releaseErr.Error(),
+				)
+			}
+
 			return dto.OrderResponse{}, err
 		}
 
@@ -165,7 +183,7 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 	tx, err := s.pool.Begin(ctx)
 
 	if err != nil {
-		s.compensateReservations(ctx, reserved)
+		s.compensateReservations(ctx, sagaID, reserved)
 		return dto.OrderResponse{}, err
 	}
 
@@ -175,12 +193,13 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 		ClientID: request.ClientID,
 		Status:   domain.OrderStatusPending,
 		Total:    0,
+		SagaID:   sagaID,
 	}
 
 	order, err = s.orderRepo.Create(ctx, tx, order)
 
 	if err != nil {
-		s.compensateReservations(ctx, reserved)
+		s.compensateReservations(ctx, sagaID, reserved)
 		return dto.OrderResponse{}, err
 	}
 
@@ -204,7 +223,7 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 		item, err = s.itemRepo.Create(ctx, tx, item)
 
 		if err != nil {
-			s.compensateReservations(ctx, reserved)
+			s.compensateReservations(ctx, sagaID, reserved)
 			return dto.OrderResponse{}, err
 		}
 
@@ -215,17 +234,24 @@ func (s *OrderService) Create(ctx context.Context, request dto.CreateOrderReques
 	err = s.orderRepo.UpdateTotal(ctx, tx, order.ID, total)
 
 	if err != nil {
-		s.compensateReservations(ctx, reserved)
+		s.compensateReservations(ctx, sagaID, reserved)
 		return dto.OrderResponse{}, err
 	}
 
 	order.Total = total
 
 	if err = tx.Commit(ctx); err != nil {
-		s.compensateReservations(ctx, reserved)
+		s.compensateReservations(ctx, sagaID, reserved)
 		return dto.OrderResponse{},
 			fmt.Errorf("commit order: %w", err)
 	}
+
+	slog.Info("order.create.succeeded",
+		"operation", "Create",
+		"result", "ok",
+		"saga_id", sagaID.String(),
+		"order_id", order.ID.String(),
+	)
 
 	response := dto.NewOrderResponse(order, client.Name)
 	response.Items = itemsResponse
@@ -326,13 +352,9 @@ func (s *OrderService) FindAll(ctx context.Context, limit int, offset int) ([]dt
 }
 
 // refundItemsStock devolve ao stock-service, via HTTP, o estoque de todos
-// os itens do pedido. Chamada antes do commit da transação local que muda
-// o status do pedido para CANCELED: se a liberação falhar, o cancelamento
-// inteiro é abortado e o pedido continua no status anterior — falha segura
-// (nenhum estado fica inconsistente). O gap conhecido é o caminho inverso
-// (liberação funciona, mas o commit local falha logo em seguida) — tratado
-// de fato só com idempotência na Saga (Etapa 10).
-func (s *OrderService) refundItemsStock(ctx context.Context, orderID uuid.UUID) error {
+// os itens do pedido, usando o mesmo sagaID gerado na criação do pedido
+// (order.SagaID)
+func (s *OrderService) refundItemsStock(ctx context.Context, sagaID uuid.UUID, orderID uuid.UUID) error {
 
 	items, err := s.itemRepo.FindByOrderID(ctx, orderID)
 	if err != nil {
@@ -340,7 +362,7 @@ func (s *OrderService) refundItemsStock(ctx context.Context, orderID uuid.UUID) 
 	}
 
 	for _, item := range items {
-		if err := s.productStock.Release(ctx, item.ProductID, item.Quantity); err != nil {
+		if err := s.productStock.Release(ctx, sagaID, item.ProductID, item.Quantity); err != nil {
 			return err
 		}
 	}
@@ -372,7 +394,7 @@ func (s *OrderService) UpdateStatus(ctx context.Context, id uuid.UUID, status do
 	}
 
 	if status == domain.OrderStatusCanceled {
-		if err := s.refundItemsStock(ctx, order.ID); err != nil {
+		if err := s.refundItemsStock(ctx, order.SagaID, order.ID); err != nil {
 			return dto.OrderResponse{}, err
 		}
 	}
@@ -435,7 +457,7 @@ func (s *OrderService) Cancel(ctx context.Context, id uuid.UUID) (dto.OrderRespo
 		return dto.OrderResponse{}, err
 	}
 
-	if err := s.refundItemsStock(ctx, order.ID); err != nil {
+	if err := s.refundItemsStock(ctx, order.SagaID, order.ID); err != nil {
 		return dto.OrderResponse{}, err
 	}
 

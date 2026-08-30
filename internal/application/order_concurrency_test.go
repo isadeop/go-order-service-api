@@ -5,22 +5,28 @@ import (
 	"errors"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/isadeop/go-order-service-api/internal/custom_errors"
 	"github.com/isadeop/go-order-service-api/internal/domain"
 	"github.com/isadeop/go-order-service-api/internal/dto"
 	"github.com/isadeop/go-order-service-api/internal/entrypoint/http/controllers"
 	"github.com/isadeop/go-order-service-api/internal/entrypoint/http/routes"
+	"github.com/isadeop/go-order-service-api/internal/entrypoint/messaging/consumers"
 	"github.com/isadeop/go-order-service-api/internal/infra/config"
+	"github.com/isadeop/go-order-service-api/internal/infra/messaging"
 	"github.com/isadeop/go-order-service-api/internal/infra/repository"
+	"github.com/isadeop/go-order-service-api/internal/infra/sagaclient"
 	"github.com/isadeop/go-order-service-api/internal/infra/stockclient"
 )
 
@@ -78,12 +84,38 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
+func redpandaTestBrokers() []string {
+	return strings.Split(envOrDefault("REDPANDA_BROKERS", "localhost:19092"), ",")
+}
+
+func newRedpandaTestClient(t *testing.T, opts ...kgo.Opt) *kgo.Client {
+	t.Helper()
+
+	client, err := kgo.NewClient(append([]kgo.Opt{kgo.SeedBrokers(redpandaTestBrokers()...)}, opts...)...)
+	if err != nil {
+		t.Skipf("não foi possível criar cliente do redpanda de teste: %v", err)
+	}
+
+	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := client.Ping(pingCtx); err != nil {
+		client.Close()
+		t.Skipf("redpanda de teste indisponível: %v", err)
+	}
+
+	t.Cleanup(client.Close)
+
+	return client
+}
+
 func newStockServiceTestServer(t *testing.T, stockPool *pgxpool.Pool) *httptest.Server {
 	t.Helper()
 
 	stockConnPool := repository.NewConnPool(stockPool)
 	productRepository := repository.NewProductRepository(stockPool)
-	productService := NewProductService(stockConnPool, productRepository)
+	stockReservationRepository := repository.NewStockReservationRepository(stockPool)
+	productService := NewProductService(stockConnPool, productRepository, stockReservationRepository)
 	productController := controllers.NewProductController(productService)
 
 	r := chi.NewRouter()
@@ -96,6 +128,59 @@ func newStockServiceTestServer(t *testing.T, stockPool *pgxpool.Pool) *httptest.
 	return server
 }
 
+type testProductStockGateway struct {
+	http *stockclient.Client
+	saga *sagaclient.Client
+}
+
+func (g *testProductStockGateway) FindByID(ctx context.Context, id uuid.UUID) (domain.Product, error) {
+	return g.http.FindByID(ctx, id)
+}
+
+func (g *testProductStockGateway) Reserve(ctx context.Context, sagaID uuid.UUID, productID uuid.UUID, quantity int) error {
+	return g.saga.Reserve(ctx, sagaID, productID, quantity)
+}
+
+func (g *testProductStockGateway) Release(ctx context.Context, sagaID uuid.UUID, productID uuid.UUID, quantity int) error {
+	return g.http.Release(ctx, sagaID, productID, quantity)
+}
+
+func newSagaTestGateway(t *testing.T, stockServer *httptest.Server, productService *ProductService) *testProductStockGateway {
+	t.Helper()
+
+	suffix := uuid.NewString()
+	commandsTopic := "stock-commands-test-" + suffix
+	eventsTopic := "stock-events-test-" + suffix
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	setupClient := newRedpandaTestClient(t)
+	if err := messaging.EnsureTopics(context.Background(), setupClient, 1, commandsTopic, eventsTopic); err != nil {
+		t.Fatalf("setup: falha ao criar tópicos de teste: %v", err)
+	}
+
+	orderProducerClient := newRedpandaTestClient(t)
+	orderReplyConsumerClient := newRedpandaTestClient(t,
+		kgo.ConsumeTopics(eventsTopic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	sagaReserveClient := sagaclient.New(ctx, orderProducerClient, orderReplyConsumerClient, commandsTopic, 10*time.Second)
+
+	stockCommandConsumerClient := newRedpandaTestClient(t,
+		kgo.ConsumeTopics(commandsTopic),
+		kgo.ConsumerGroup("stock-service-test-"+suffix),
+	)
+	stockReplyProducerClient := newRedpandaTestClient(t)
+	reserveConsumer := consumers.NewReserveConsumer(stockCommandConsumerClient, stockReplyProducerClient, eventsTopic, productService)
+	go reserveConsumer.Run(ctx)
+
+	return &testProductStockGateway{
+		http: stockclient.New(stockServer.URL),
+		saga: sagaReserveClient,
+	}
+}
+
 func newIntegrationOrderService(t *testing.T, stock int) (service *OrderService, stockPool *pgxpool.Pool, clientID, productID uuid.UUID) {
 	t.Helper()
 
@@ -106,8 +191,13 @@ func newIntegrationOrderService(t *testing.T, stock int) (service *OrderService,
 	orderRepo := repository.NewOrderRepository(ordersPool)
 	itemRepo := repository.NewOrderItemRepository(ordersPool)
 
+	stockConnPool := repository.NewConnPool(stockPool)
+	stockProductRepo := repository.NewProductRepository(stockPool)
+	stockReservationRepo := repository.NewStockReservationRepository(stockPool)
+	stockProductService := NewProductService(stockConnPool, stockProductRepo, stockReservationRepo)
+
 	stockServer := newStockServiceTestServer(t, stockPool)
-	productStock := stockclient.New(stockServer.URL)
+	productStock := newSagaTestGateway(t, stockServer, stockProductService)
 
 	client, err := clientRepo.Create(context.Background(), domain.Client{
 		Name:         "Cliente Concorrência",
@@ -119,8 +209,7 @@ func newIntegrationOrderService(t *testing.T, stock int) (service *OrderService,
 		t.Fatalf("setup: falha ao criar cliente: %v", err)
 	}
 
-	productRepo := repository.NewProductRepository(stockPool)
-	product, err := productRepo.Create(context.Background(), domain.Product{
+	product, err := stockProductRepo.Create(context.Background(), domain.Product{
 		Name:  "Produto Concorrência " + uuid.NewString(),
 		Price: 10,
 		Stock: stock,
@@ -133,7 +222,7 @@ func newIntegrationOrderService(t *testing.T, stock int) (service *OrderService,
 		ctx := context.Background()
 		_, _ = ordersPool.Exec(ctx, "DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE client_id = $1)", client.ID)
 		_, _ = ordersPool.Exec(ctx, "DELETE FROM orders WHERE client_id = $1", client.ID)
-		_ = productRepo.Delete(ctx, product.ID)
+		_ = stockProductRepo.Delete(ctx, product.ID)
 		_ = clientRepo.Delete(ctx, client.ID)
 	})
 

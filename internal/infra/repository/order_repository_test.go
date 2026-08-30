@@ -32,6 +32,9 @@ func TestOrderRepository_Create_HappyPath(t *testing.T) {
 	if order.CreatedAt.IsZero() {
 		t.Error("esperava created_at preenchido pelo banco")
 	}
+	if order.SagaID == uuid.Nil {
+		t.Error("esperava saga_id preenchido")
+	}
 }
 
 func TestOrderRepository_Create_ClienteInexistenteViolaFK(t *testing.T) {

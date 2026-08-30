@@ -10,3 +10,4 @@ var ErrProductPriceInvalid = errors.New("product price must be greater than zero
 var ErrProductStockInvalid = errors.New("product stock cannot be negative / estoque do produto não pode ser negativo")
 var ErrProductStockRequired = errors.New("product stock is required / estoque do produto é obrigatório")
 var ErrInvalidProductID = errors.New("product id must be a valid uuid / id do produto deve ser um uuid válido")
+var ErrStockReservationNotFound = errors.New("stock reservation not found / reserva de estoque não encontrada")

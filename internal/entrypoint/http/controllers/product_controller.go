@@ -18,8 +18,8 @@ type ProductService interface {
 	FindAll(ctx context.Context) ([]dto.ProductResponse, error)
 	FindByID(ctx context.Context, id uuid.UUID) (dto.ProductResponse, error)
 	Update(ctx context.Context, id uuid.UUID, request dto.UpdateProductRequest) (dto.ProductResponse, error)
-	Reserve(ctx context.Context, id uuid.UUID, quantity int) (dto.ProductResponse, error)
-	Release(ctx context.Context, id uuid.UUID, quantity int) (dto.ProductResponse, error)
+	Reserve(ctx context.Context, sagaID uuid.UUID, id uuid.UUID, quantity int) (dto.ProductResponse, error)
+	Release(ctx context.Context, sagaID uuid.UUID, id uuid.UUID, quantity int) (dto.ProductResponse, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
@@ -175,10 +175,16 @@ func (c *ProductController) UpdateProduct(
 	json.NewEncoder(w).Encode(response)
 }
 
-// reserveOrReleaseRequest é o payload de /produtos/{id}/reservar e
-// /produtos/{id}/liberar — a única informação necessária é a quantidade.
 type reserveOrReleaseRequest struct {
-	Quantity int `json:"quantity"`
+	Quantity int        `json:"quantity"`
+	SagaID   *uuid.UUID `json:"saga_id,omitempty"`
+}
+
+func (r reserveOrReleaseRequest) sagaIDOrNew() uuid.UUID {
+	if r.SagaID != nil {
+		return *r.SagaID
+	}
+	return uuid.New()
 }
 
 func (c *ProductController) Reserve(
@@ -199,6 +205,7 @@ func (c *ProductController) Reserve(
 
 	response, err := c.service.Reserve(
 		r.Context(),
+		request.sagaIDOrNew(),
 		id,
 		request.Quantity,
 	)
@@ -230,6 +237,7 @@ func (c *ProductController) Release(
 
 	response, err := c.service.Release(
 		r.Context(),
+		request.sagaIDOrNew(),
 		id,
 		request.Quantity,
 	)

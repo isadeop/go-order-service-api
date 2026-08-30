@@ -29,12 +29,16 @@ func (f *fakeTx) Rollback(ctx context.Context) error {
 }
 
 type fakeConnPool struct {
-	tx       *fakeTx
+	tx       *fakeTx   // última transação aberta
+	txs      []*fakeTx // histórico completo
 	beginErr error
 }
 
 func newFakeConnPool() *fakeConnPool {
-	return &fakeConnPool{tx: &fakeTx{}}
+	pool := &fakeConnPool{}
+	pool.tx = &fakeTx{}
+	pool.txs = []*fakeTx{pool.tx}
+	return pool
 }
 
 func (f *fakeConnPool) Begin(ctx context.Context) (Tx, error) {
@@ -42,8 +46,12 @@ func (f *fakeConnPool) Begin(ctx context.Context) (Tx, error) {
 		return nil, f.beginErr
 	}
 
-	if f.tx.committed || f.tx.rolledBack {
-		panic("fakeConnPool: Begin chamado mais de uma vez; use uma fixture nova por transação")
+	if !f.tx.committed && !f.tx.rolledBack {
+		return f.tx, nil
 	}
-	return f.tx, nil
+
+	tx := &fakeTx{}
+	f.tx = tx
+	f.txs = append(f.txs, tx)
+	return tx, nil
 }

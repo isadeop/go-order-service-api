@@ -74,6 +74,7 @@ func createTestOrder(t *testing.T, pool *pgxpool.Pool, clientID uuid.UUID, total
 		ClientID: clientID,
 		Status:   domain.OrderStatusPending,
 		Total:    total,
+		SagaID:   uuid.New(),
 	})
 	if err != nil {
 		t.Fatalf("setup: falha ao criar pedido de teste: %v", err)

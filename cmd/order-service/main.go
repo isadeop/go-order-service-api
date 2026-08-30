@@ -1,5 +1,6 @@
-// order-service expõe clientes e pedidos e é dono do banco orders_db
-// Não acessa mais o banco de produtos diretamente
+// order-service expõe clientes e pedidos e é dono do banco orders_db.
+// Consulta e libera estoque via HTTP (internal/infra/stockclient) e reserva estoque via
+// Redpanda
 package main
 
 import (
@@ -7,13 +8,21 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/isadeop/go-order-service-api/internal/application"
+	"github.com/isadeop/go-order-service-api/internal/domain"
 	"github.com/isadeop/go-order-service-api/internal/entrypoint/http/controllers"
 	"github.com/isadeop/go-order-service-api/internal/entrypoint/http/routes"
 	"github.com/isadeop/go-order-service-api/internal/infra/config"
 	"github.com/isadeop/go-order-service-api/internal/infra/database"
+	"github.com/isadeop/go-order-service-api/internal/infra/messaging"
 	"github.com/isadeop/go-order-service-api/internal/infra/repository"
+	"github.com/isadeop/go-order-service-api/internal/infra/sagaclient"
 	"github.com/isadeop/go-order-service-api/internal/infra/stockclient"
 	"github.com/isadeop/go-order-service-api/internal/observability"
 
@@ -47,9 +56,7 @@ func main() {
 
 	defer pool.Close()
 
-	// connPool adapta *pgxpool.Pool à porta services.ConnPool: é o único
-	// ponto em que os casos de uso passam a abrir transações reais de
-	// Postgres, sem que internal/application precise importar pgx.
+	// connPool adapta *pgxpool.Pool à porta services.ConnPool
 	connPool := repository.NewConnPool(pool)
 
 	clientRepository :=
@@ -68,8 +75,54 @@ func main() {
 		repository.NewOrderItemRepository(pool)
 
 	stockServiceURL := getEnv("STOCK_SERVICE_URL", "http://localhost:8081")
+	httpStockClient := stockclient.New(stockServiceURL)
 
-	productStock := stockclient.New(stockServiceURL)
+	redpandaBrokers := strings.Split(getEnv("REDPANDA_BROKERS", "localhost:19092"), ",")
+
+	// producerClient publica os comandos de reserva (stock-commands).
+	producerClient, err := kgo.NewClient(kgo.SeedBrokers(redpandaBrokers...))
+	if err != nil {
+		slog.Error("redpanda.client_failed",
+			"operation", "startup",
+			"result", "error",
+			"err", err.Error(),
+		)
+		os.Exit(1)
+	}
+	defer producerClient.Close()
+
+	if err := messaging.EnsureTopics(ctx, producerClient, 1, messaging.TopicStockCommands, messaging.TopicStockEvents); err != nil {
+		slog.Error("redpanda.ensure_topics_failed",
+			"operation", "startup",
+			"result", "error",
+			"err", err.Error(),
+		)
+		os.Exit(1)
+	}
+
+	// replyConsumerClient consome as respostas (stock-events)
+	replyConsumerClient, err := kgo.NewClient(
+		kgo.SeedBrokers(redpandaBrokers...),
+		kgo.ConsumeTopics(messaging.TopicStockEvents),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
+	)
+	if err != nil {
+		slog.Error("redpanda.client_failed",
+			"operation", "startup",
+			"result", "error",
+			"err", err.Error(),
+		)
+		os.Exit(1)
+	}
+	defer replyConsumerClient.Close()
+
+	// reconciliação por tempo (30s)
+	sagaReserveClient := sagaclient.New(ctx, producerClient, replyConsumerClient, messaging.TopicStockCommands, 30*time.Second)
+
+	productStock := &productStockGateway{
+		http: httpStockClient,
+		saga: sagaReserveClient,
+	}
 
 	orderService :=
 		application.NewOrderService(
@@ -103,6 +156,7 @@ func main() {
 		"operation", "startup",
 		"port", cfg.Port,
 		"stock_service_url", stockServiceURL,
+		"redpanda_brokers", strings.Join(redpandaBrokers, ","),
 	)
 
 	slog.Info("server.routes_registered",
@@ -139,4 +193,21 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+type productStockGateway struct {
+	http *stockclient.Client
+	saga *sagaclient.Client
+}
+
+func (g *productStockGateway) FindByID(ctx context.Context, id uuid.UUID) (domain.Product, error) {
+	return g.http.FindByID(ctx, id)
+}
+
+func (g *productStockGateway) Reserve(ctx context.Context, sagaID uuid.UUID, productID uuid.UUID, quantity int) error {
+	return g.saga.Reserve(ctx, sagaID, productID, quantity)
+}
+
+func (g *productStockGateway) Release(ctx context.Context, sagaID uuid.UUID, productID uuid.UUID, quantity int) error {
+	return g.http.Release(ctx, sagaID, productID, quantity)
 }

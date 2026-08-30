@@ -3,6 +3,9 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -22,15 +25,24 @@ type ProductRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
-type ProductService struct {
-	pool       ConnPool
-	repository ProductRepository
+type StockReservationRepository interface {
+	FindForUpdate(ctx context.Context, tx Tx, sagaID uuid.UUID, productID uuid.UUID) (domain.StockReservation, error)
+	Create(ctx context.Context, tx Tx, reservation domain.StockReservation) error
+	UpdateStatus(ctx context.Context, tx Tx, sagaID uuid.UUID, productID uuid.UUID, status domain.StockReservationStatus) error
+	FindStaleReserved(ctx context.Context, olderThan time.Time) ([]domain.StockReservation, error)
 }
 
-func NewProductService(pool ConnPool, repo ProductRepository) *ProductService {
+type ProductService struct {
+	pool         ConnPool
+	repository   ProductRepository
+	reservations StockReservationRepository
+}
+
+func NewProductService(pool ConnPool, repo ProductRepository, reservations StockReservationRepository) *ProductService {
 	return &ProductService{
-		pool:       pool,
-		repository: repo,
+		pool:         pool,
+		repository:   repo,
+		reservations: reservations,
 	}
 }
 
@@ -180,8 +192,11 @@ func (s *ProductService) Update(
 	return dto.NewProductResponse(product), nil
 }
 
+// Reserve decrementa o estoque de um produto em nome de uma saga
+// (sagaID)
 func (s *ProductService) Reserve(
 	ctx context.Context,
+	sagaID uuid.UUID,
 	id uuid.UUID,
 	quantity int,
 ) (dto.ProductResponse, error) {
@@ -191,6 +206,23 @@ func (s *ProductService) Reserve(
 		return dto.ProductResponse{}, err
 	}
 	defer tx.Rollback(ctx)
+
+	_, err = s.reservations.FindForUpdate(ctx, tx, sagaID, id)
+
+	if err == nil {
+		product, findErr := s.repository.FindByIDForUpdate(ctx, tx, id)
+		if findErr != nil {
+			return dto.ProductResponse{}, findErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return dto.ProductResponse{}, err
+		}
+		return dto.NewProductResponse(product), nil
+	}
+
+	if !errors.Is(err, custom_errors.ErrStockReservationNotFound) {
+		return dto.ProductResponse{}, err
+	}
 
 	product, err := s.repository.FindByIDForUpdate(ctx, tx, id)
 	if err != nil {
@@ -206,6 +238,15 @@ func (s *ProductService) Reserve(
 		return dto.ProductResponse{}, err
 	}
 
+	if err := s.reservations.Create(ctx, tx, domain.StockReservation{
+		SagaID:    sagaID,
+		ProductID: id,
+		Quantity:  quantity,
+		Status:    domain.StockReservationStatusReserved,
+	}); err != nil {
+		return dto.ProductResponse{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return dto.ProductResponse{}, err
 	}
@@ -213,8 +254,12 @@ func (s *ProductService) Reserve(
 	return dto.NewProductResponse(product), nil
 }
 
+// Release devolve ao estoque a quantidade reservada por uma saga (sagaID)
+// para um produto. Só devolve efetivamente quando encontra uma reserva ainda com status
+// RESERVED, e usa a quantidade registrada nela
 func (s *ProductService) Release(
 	ctx context.Context,
+	sagaID uuid.UUID,
 	id uuid.UUID,
 	quantity int,
 ) (dto.ProductResponse, error) {
@@ -229,15 +274,47 @@ func (s *ProductService) Release(
 	}
 	defer tx.Rollback(ctx)
 
+	reservation, err := s.reservations.FindForUpdate(ctx, tx, sagaID, id)
+
+	if errors.Is(err, custom_errors.ErrStockReservationNotFound) {
+		product, findErr := s.repository.FindByID(ctx, id)
+		if findErr != nil {
+			return dto.ProductResponse{}, findErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return dto.ProductResponse{}, err
+		}
+		return dto.NewProductResponse(product), nil
+	}
+
+	if err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	if reservation.Status == domain.StockReservationStatusReleased {
+		product, findErr := s.repository.FindByIDForUpdate(ctx, tx, id)
+		if findErr != nil {
+			return dto.ProductResponse{}, findErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return dto.ProductResponse{}, err
+		}
+		return dto.NewProductResponse(product), nil
+	}
+
 	product, err := s.repository.FindByIDForUpdate(ctx, tx, id)
 	if err != nil {
 		return dto.ProductResponse{}, err
 	}
 
-	product.Release(quantity)
+	product.Release(reservation.Quantity)
 
 	product, err = s.repository.Update(ctx, tx, id, product)
 	if err != nil {
+		return dto.ProductResponse{}, err
+	}
+
+	if err := s.reservations.UpdateStatus(ctx, tx, sagaID, id, domain.StockReservationStatusReleased); err != nil {
 		return dto.ProductResponse{}, err
 	}
 
@@ -253,4 +330,45 @@ func (s *ProductService) Delete(
 	id uuid.UUID,
 ) error {
 	return s.repository.Delete(ctx, id)
+}
+
+// ReconcileStaleReservations libera reservas de estoque que ficaram
+// paradas em RESERVED por mais tempo, e é chamado periodicamente por
+// cmd/stock-service/main.go.
+func (s *ProductService) ReconcileStaleReservations(ctx context.Context, staleAfter time.Duration) (releasedCount int, err error) {
+
+	cutoff := time.Now().Add(-staleAfter)
+
+	stale, err := s.reservations.FindStaleReserved(ctx, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("find stale reservations: %w", err)
+	}
+
+	for _, reservation := range stale {
+
+		if _, releaseErr := s.Release(ctx, reservation.SagaID, reservation.ProductID, reservation.Quantity); releaseErr != nil {
+			slog.Error("stock.reconciliation.release_failed",
+				"operation", "ReconcileStaleReservations",
+				"result", "error",
+				"saga_id", reservation.SagaID.String(),
+				"product_id", reservation.ProductID.String(),
+				"quantity", reservation.Quantity,
+				"err", releaseErr.Error(),
+			)
+			continue
+		}
+
+		slog.Warn("stock.reconciliation.released_orphan",
+			"operation", "ReconcileStaleReservations",
+			"result", "ok",
+			"saga_id", reservation.SagaID.String(),
+			"product_id", reservation.ProductID.String(),
+			"quantity", reservation.Quantity,
+			"reserved_since", reservation.CreatedAt,
+		)
+
+		releasedCount++
+	}
+
+	return releasedCount, nil
 }

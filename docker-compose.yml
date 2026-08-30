@@ -96,6 +96,7 @@ services:
       POSTGRES_DB: orders_db
       POSTGRES_SSLMODE: disable
       STOCK_SERVICE_URL: http://stock-service:8080
+      REDPANDA_BROKERS: redpanda:9092
     ports:
       # /clientes e /pedidos
       - "8080:8080"
@@ -106,6 +107,8 @@ services:
         condition: service_completed_successfully
       stock-service:
         condition: service_started
+      redpanda:
+        condition: service_healthy
     networks:
       - order-service-net
 
@@ -123,6 +126,7 @@ services:
       POSTGRES_PORT: "5432"
       POSTGRES_DB: stock_db
       POSTGRES_SSLMODE: disable
+      REDPANDA_BROKERS: redpanda:9092
     ports:
       # /produtos
       - "8081:8080"
@@ -131,13 +135,11 @@ services:
         condition: service_healthy
       migrate-stock:
         condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
     networks:
       - order-service-net
 
-  # Broker de mensageria (Etapa 8): só a infraestrutura de pé por enquanto,
-  # nenhum serviço publica/consome nada ainda — isso é a Etapa 9. Um único
-  # nó, modo dev (--mode dev-container relaxa checagens de recurso feitas
-  # pra cluster de produção, apropriado para uma máquina de desenvolvimento).
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
     container_name: redpanda
@@ -154,11 +156,9 @@ services:
       - --rpc-addr=redpanda:33145
       - --advertise-rpc-addr=redpanda:33145
     ports:
-      # Kafka API, exposta no host para permitir produzir/consumir direto
-      # da máquina (ex.: um cliente Go rodando fora do Docker).
+      # Kafka API exposta no host
       - "19092:19092"
-      # Schema Registry / Pandaproxy (REST) / Admin API — úteis para
-      # inspecionar o cluster de fora do container.
+      # Schema Registry / Pandaproxy (REST) / Admin API
       - "18081:18081"
       - "18082:18082"
       - "9644:9644"
@@ -170,8 +170,7 @@ services:
     networks:
       - order-service-net
 
-  # UI web para inspecionar tópicos/mensagens do Redpanda — opcional, só
-  # facilita demonstrar que a mensageria está funcionando.
+  # UI web para inspecionar tópicos/mensagens do Redpanda
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:latest
     container_name: redpanda-console
